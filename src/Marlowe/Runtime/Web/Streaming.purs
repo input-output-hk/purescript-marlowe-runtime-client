@@ -49,7 +49,7 @@ import Effect.Ref as Ref
 import Halogen.Subscription (Listener)
 import Halogen.Subscription as Subscription
 import Marlowe.Runtime.Web.Client (foldMapMContractPages, getPages', getResource')
-import Marlowe.Runtime.Web.Types (ContractEndpoint, ContractId, ContractState, GetContractResponse, GetContractsResponse, ServerURL, TransactionEndpoint, TransactionsEndpoint, TxHeader, api)
+import Marlowe.Runtime.Web.Types (class QueryParams, ContractEndpoint, ContractId, ContractState, ContractsEndpoint(..), GetContractResponse, GetContractsResponse, ServerURL, TransactionEndpoint, TransactionsEndpoint, TxHeader, api)
 
 -- | API CAUTION: We update the state in chunks but send the events one by one. This means that
 -- | the event handler can see some state changes (in `getLiveState`) before it receives some notifications.
@@ -83,13 +83,16 @@ newtype MaxPages = MaxPages Int
 -- | TODO: we should return `Aff` or fiber and allow more flexible "threading" management.
 -- Use constraint at the end: `Warn (Text "pushPullContractsStreams is deprecated, use web socket based implementation instead!")`
 contracts
-  :: PollingInterval
+  :: forall params
+   . QueryParams ContractsEndpoint params
+  => PollingInterval
   -> RequestInterval
+  -> params
   -> (GetContractsResponse -> Boolean)
   -> Maybe MaxPages
   -> ServerURL
   -> Aff ContractStream
-contracts (PollingInterval pollingInterval) (RequestInterval requestInterval) filterContracts possibleMaxPages serverUrl = do
+contracts (PollingInterval pollingInterval) (RequestInterval requestInterval) params filterContracts possibleMaxPages serverUrl = do
   contractsRef <- liftEffect $ Ref.new Map.empty
   pageNumberRef <- liftEffect $ Ref.new 0
   contractsAVar <- AVar.empty
@@ -105,7 +108,7 @@ contracts (PollingInterval pollingInterval) (RequestInterval requestInterval) fi
       void $ AVar.tryTake contractsAVar
       previousContracts <- liftEffect $ Ref.read contractsRef
       nextContracts :: Map ContractId GetContractsResponse <-
-        map contractsById $ Effect.liftEither =<< foldMapMContractPages @String serverUrl api range \pageContracts -> do
+        map contractsById $ Effect.liftEither =<< foldMapMContractPages @String serverUrl api params range \pageContracts -> do
           let
             pageContracts' = filter filterContracts pageContracts
           liftEffect do
@@ -142,8 +145,7 @@ type TransactionsEndpointsSource = Map ContractId TransactionsEndpoint
 -- | The resuling set of txs per contract.
 type ContractTransactionsMap = Map ContractId (Array TxHeaderWithEndpoint)
 
-type ContractTransactionsEvent
-  = ContractId
+type ContractTransactionsEvent = ContractId
   /\ { new :: Array TxHeaderWithEndpoint, old :: Maybe (Array TxHeaderWithEndpoint) }
 
 newtype ContractTransactionsStream = ContractTransactionsStream
@@ -202,13 +204,13 @@ fetchContractsTransactions endpoints prevContractTransactionMap listener (Reques
       action = do
         let
           getTransactions = do
-            pages <- getPages' @String serverUrl transactionEndpoint Nothing >>= Effect.liftEither
+            pages <- getPages' @String serverUrl transactionEndpoint {} Nothing >>= Effect.liftEither
             pure $ foldMap _.page pages
         (txHeaders :: Array { resource :: TxHeader, links :: { transaction :: TransactionEndpoint } }) <- getTransactions
         delay requestInterval
         let
           prevTransactions = Map.lookup contractId prevContractTransactionMap
-          newTransactions = txHeaders <#> \{ resource, links: { transaction: transactionEndpoint' }} ->
+          newTransactions = txHeaders <#> \{ resource, links: { transaction: transactionEndpoint' } } ->
             resource /\ transactionEndpoint'
           change =
             if Just (map fst newTransactions) == (map fst <$> prevTransactions) then
@@ -294,13 +296,13 @@ fetchContractsStates endpoints prevContractStateMap listener (RequestInterval re
     let
       action = do
         let
-          getContractState = (getResource' @String serverUrl endpoint {} >>= Effect.liftEither) <#> _.payload.resource -- <#> foldMap _.page
+          getContractState = (getResource' @String serverUrl endpoint {} {} >>= Effect.liftEither) <#> _.payload.resource -- <#> foldMap _.page
         (newContractState :: ContractState) <- getContractState
         delay requestInterval
         let
           oldContractState = Map.lookup contractId prevContractStateMap
-          change = if oldContractState /= Just newContractState
-            then Nothing
+          change =
+            if oldContractState /= Just newContractState then Nothing
             else pure { old: oldContractState, new: newContractState }
         pure $ Just $ change /\ contractId /\ newContractState
     action `catchError` \_ -> do
@@ -380,9 +382,18 @@ contractsWithTransactions (ContractStream contractStream) (ContractStateStream c
 
   ContractWithTransactionsStream { emitter, getLiveState, getState, start }
 
-mkContractsWithTransactions :: PollingInterval -> RequestInterval -> (GetContractsResponse -> Boolean) -> Maybe MaxPages -> ServerURL -> Aff ContractWithTransactionsStream
-mkContractsWithTransactions pollingInterval requestInterval filterContracts possibleMaxPages serverUrl = do
-  contractStream@(ContractStream { getState }) <- contracts pollingInterval requestInterval filterContracts possibleMaxPages serverUrl
+mkContractsWithTransactions
+  :: forall params
+   . QueryParams ContractsEndpoint params
+  => PollingInterval
+  -> RequestInterval
+  -> params
+  -> (GetContractsResponse -> Boolean)
+  -> Maybe MaxPages
+  -> ServerURL
+  -> Aff ContractWithTransactionsStream
+mkContractsWithTransactions pollingInterval requestInterval params filterContracts possibleMaxPages serverUrl = do
+  contractStream@(ContractStream { getState }) <- contracts pollingInterval requestInterval params filterContracts possibleMaxPages serverUrl
   let
     transactionEndpointsSource = Map.catMaybes <<< map (_.links.transactions) <<< Map.filter filterContracts <$> getState
     contractEndpointsSource = map (_.links.contract) <<< Map.filter filterContracts <$> getState

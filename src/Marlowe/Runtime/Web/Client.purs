@@ -11,8 +11,9 @@ import Control.Monad.Loops (unfoldrM)
 import Control.Monad.Trans.Class (lift)
 import Data.Argonaut (class DecodeJson, Json, JsonDecodeError, decodeJson, stringify)
 import Data.Argonaut.Decode ((.:))
+import Data.Array as Array
 import Data.Bifunctor (lmap)
-import Data.Either (Either(..), either)
+import Data.Either (Either(..), either, fromRight)
 import Data.Foldable (fold, foldMap)
 import Data.Generic.Rep (class Generic)
 import Data.HTTP.Method (Method(..))
@@ -23,17 +24,29 @@ import Data.Maybe (Maybe(..))
 import Data.Newtype (class Newtype, unwrap)
 import Data.Show.Generic (genericShow)
 import Data.String.CaseInsensitive (CaseInsensitiveString(..))
-import Data.Tuple.Nested ((/\))
+import Data.Tuple.Nested (type (/\), (/\))
 import Effect.Aff (Aff)
 import Effect.Aff.Class (class MonadAff, liftAff)
 import Fetch (RequestMode(..))
 import Fetch.Core.Headers (Headers, toArray)
-import Marlowe.Runtime.Web.Types (class EncodeHeaders, class EncodeJsonBody, class ToResourceLink, ApiError, GetContractsResponse, IndexEndpoint(..), PostMerkleizationRequest, PostMerkleizationResponse, ResourceEndpoint(..), ResourceLink(..), ResourceWithLinks, ResourceWithLinksRow, ServerURL(..), decodeResourceWithLink, encodeHeaders, encodeJsonBody, toResourceLink)
+import Foreign.Object (Object, fromHomogeneous)
+import Foreign.Object as Object
+import Marlowe.Runtime.Web.Types (class EncodeHeaders, class EncodeJsonBody, class QueryParams, class ToResourceLink, ApiError, GetContractsResponse, IndexEndpoint(..), PostMerkleizationRequest, PostMerkleizationResponse, ResourceEndpoint(..), ResourceLink(..), ResourceWithLinks, ResourceWithLinksRow, ServerURL(..), decodeResourceWithLink, encodeHeaders, encodeJsonBody, toQueryParams, toResourceLink)
+import Parsing as Parsing
 import Prim.Row (class Lacks) as Row
+import Prim.RowList as RL
 import Record as R
 import Safe.Coerce (coerce)
 import Type.Prelude (Proxy(..))
 import Type.Row.Homogeneous (class Homogeneous) as Row
+import URI as URI
+import URI.AbsoluteURI as URI
+import URI.Extra.QueryPairs (Key, QueryPairs(..), Value, keyFromString, keyToString, valueFromString, valueToString) as URI
+import URI.Extra.QueryPairs as URI.QueryPairs
+import URI.HostPortPair (HostPortPair) as URI
+import URI.HostPortPair as HostPortPair
+import URI.URIRef (Fragment, HierPath, Host, Path, Port, RelPath, URIRefOptions, UserInfo) as URI
+import URI.URIRef as URIRef
 
 data ClientError err
   = FetchError FetchError
@@ -82,17 +95,21 @@ decodeResponseWithLink
 decodeResponseWithLink decodeResource statusCode = decodeResponse (decodeResourceWithLink decodeResource) statusCode
 
 getResource
-  :: forall a err extraHeaders
+  :: forall a endpoint err extraHeaders params
    . DecodeJson a
   => DecodeJson (ApiError err)
   => Row.Lacks "Access-Control-Request-Headers" extraHeaders
   => Row.Homogeneous ("Access-Control-Request-Headers" :: String | extraHeaders) String
+  => QueryParams endpoint params
+  => ToResourceLink endpoint a
   => ServerURL
-  -> ResourceLink a
+  -> endpoint
+  -> params
   -> { | extraHeaders }
   -> Aff (GetResourceResponse err { headers :: Headers, payload :: a, status :: Int })
-getResource (ServerURL serverUrl) (ResourceLink path) extraHeaders = do
+getResource (ServerURL serverUrl) endpoint extraParams extraHeaders = do
   let
+    ResourceLink path = toResourceLinkWithParams endpoint extraParams
     url = serverUrl <> "/" <> path
 
     reqHeaders =
@@ -136,18 +153,21 @@ merkleize (ServerURL serverUrl) req = runExceptT do
     Right payload -> pure { payload, headers: resHeaders, status }
 
 getPage
-  :: forall a err
+  :: forall a endpoint err params
    . DecodeJson a
   => DecodeJson (ApiError err)
+  => QueryParams endpoint params
+  => ToResourceLink endpoint a
   => ServerURL
-  -> ResourceLink a
+  -> endpoint
+  -> params
   -> Maybe Range
   -> Aff (GetResourceResponse err ({ page :: a, nextRange :: Maybe Range }))
-getPage serverUrl path possibleRange = runExceptT do
+getPage serverUrl path extraParams possibleRange = runExceptT do
   { headers, payload, status } <- ExceptT
     $ case possibleRange of
-        Just range -> getResource serverUrl path { "Range": coerce range }
-        Nothing -> getResource serverUrl path {}
+        Just range -> getResource serverUrl path extraParams { "Range": coerce range }
+        Nothing -> getResource serverUrl path extraParams {}
   pure
     { page: payload
     , nextRange:
@@ -160,35 +180,40 @@ getPage serverUrl path possibleRange = runExceptT do
 
 -- TODO generalize
 foldMapMContractPages
-  :: forall @err endpoint
+  :: forall @err endpoint params
    . ToResourceLink endpoint (Array GetContractsResponse)
   => DecodeJson (ApiError err)
+  => QueryParams endpoint params
   => ServerURL
   -> endpoint
+  -> params
   -> Maybe Range
   -> (Array GetContractsResponse -> Aff { result :: Array GetContractsResponse, stopFetching :: Boolean })
   -> Aff (Either (ClientError err) (Array GetContractsResponse))
-foldMapMContractPages serverUrl endpoint start f =
-  foldMapMPages' serverUrl endpoint (f <<< _.page) start
+foldMapMContractPages serverUrl endpoint extraParams start f =
+  foldMapMPages' serverUrl endpoint extraParams (f <<< _.page) start
 
 data FoldPageStep = FetchPage (Maybe Range) | StopFetching
 
 foldMapMPages
-  :: forall a b err m
+  :: forall a b endpoint err m params
    . DecodeJson a
   => DecodeJson (ApiError err)
   => MonadAff m
   => Monoid b
+  => QueryParams endpoint params
+  => ToResourceLink endpoint a
   => ServerURL
-  -> ResourceLink a
+  -> endpoint
+  -> params
   -> ({ page :: a, currRange :: Maybe Range } -> m { result :: b, stopFetching :: Boolean })
   -> Maybe Range
   -> m (GetResourceResponse err b)
-foldMapMPages serverUrl path f startRange = do
+foldMapMPages serverUrl path extraParams f startRange = do
   bs <- runExceptT $ flip unfoldrM (FetchPage startRange) case _ of
     StopFetching -> pure Nothing
     FetchPage currRange -> do
-      { page, nextRange } <- ExceptT $ liftAff $ getPage serverUrl path currRange
+      { page, nextRange } <- ExceptT $ liftAff $ getPage serverUrl path extraParams currRange
       { result: b, stopFetching } <- lift $ f { page, currRange }
       pure $ Just case nextRange of
         Just _ -> b /\
@@ -197,99 +222,190 @@ foldMapMPages serverUrl path f startRange = do
         Nothing -> b /\ StopFetching
   pure (fold <$> bs)
 
+toExtraQueryParmas
+  :: forall params
+   . Row.Homogeneous params (Maybe (Array String))
+  => { | params }
+  -> Array (String /\ (Maybe String))
+toExtraQueryParmas paramsRecord = do
+  let
+    obj = fromHomogeneous paramsRecord
+  k /\ possibleVs <- Object.toUnfoldable obj
+  case possibleVs of
+    Just vs -> do
+      v <- vs
+      pure $ k /\ (Just $ v)
+    Nothing -> pure $ k /\ Nothing
+
+uriOpts
+  :: Record
+       ( URI.URIRefOptions URI.UserInfo
+           (URI.HostPortPair URI.Host URI.Port)
+           URI.Path
+           URI.HierPath
+           URI.RelPath
+           (URI.QueryPairs String String)
+           URI.Fragment
+       )
+uriOpts =
+  { parseUserInfo: pure
+  , printUserInfo: identity
+  , parseHosts: HostPortPair.parser pure pure
+  , printHosts: HostPortPair.print identity identity
+  , parsePath: pure
+  , printPath: identity
+  , parseHierPath: pure
+  , printHierPath: identity
+  , parseRelPath: pure
+  , printRelPath: identity
+  , parseQuery: URI.QueryPairs.parse (URI.keyToString >>> pure) (URI.valueToString >>> pure)
+  , printQuery: URI.QueryPairs.print URI.keyFromString URI.valueFromString
+  , parseFragment: pure
+  , printFragment: identity
+  }
+
+toResourceLinkWithParams
+  :: forall a endpoint params
+   . QueryParams endpoint params
+  => ToResourceLink endpoint a
+  => endpoint
+  -> params
+  -> ResourceLink a
+toResourceLinkWithParams endpoint params = do
+  let
+    resourceLink@(ResourceLink uri) = toResourceLink endpoint
+    extraQueryParams = toQueryParams (Proxy @endpoint) params
+    possibleUriRef = Parsing.runParser uri (URIRef.parser uriOpts)
+
+    mergeQuery possibleOrigQuery = case possibleOrigQuery of
+      Nothing -> Just $ URI.QueryPairs extraQueryParams
+      Just (URI.QueryPairs origQueryParams) -> Just $ URI.QueryPairs $ origQueryParams <> extraQueryParams
+
+  fromRight resourceLink do
+    uriRef <- possibleUriRef
+    let
+      uriRef' = case uriRef of
+        Right (URIRef.RelativeRef relativePart query fragment) -> do
+          let
+            query' = mergeQuery query
+          Right $ URI.RelativeRef relativePart query' fragment
+        Left (URI.URI scheme hp query fragment) -> do
+          let
+            query' = mergeQuery query
+          Left $ URI.URI scheme hp query' fragment
+    pure $ ResourceLink $ URIRef.print uriOpts uriRef'
+
 getPages
-  :: forall a err m
+  :: forall a endpoint err m params
    . DecodeJson a
   => DecodeJson (ApiError err)
   => MonadAff m
+  => QueryParams endpoint params
+  => ToResourceLink endpoint a
   => ServerURL
-  -> ResourceLink a
+  -> endpoint
+  -> params
   -> Maybe Range
   -> m (GetResourceResponse err (List { page :: a, currRange :: Maybe Range }))
-getPages serverUrl path = foldMapMPages serverUrl path (List.singleton >>> \result -> pure { result, stopFetching: false })
+getPages serverUrl path paramsRecord = do -- params = do
+  foldMapMPages serverUrl path paramsRecord (List.singleton >>> \result -> pure { result, stopFetching: false })
 
 getPages'
-  :: forall @err endpoint a m
+  :: forall @err endpoint a m params
    . DecodeJson a
   => DecodeJson (ApiError err)
   => MonadAff m
   => ToResourceLink endpoint a
+  => QueryParams endpoint params
   => ServerURL
   -> endpoint
+  -> params
   -> Maybe Range
   -> m (GetResourceResponse err (List { page :: a, currRange :: Maybe Range }))
-getPages' serverUrl endpoint = getPages serverUrl (toResourceLink endpoint)
+getPages' serverUrl endpoint extraParams = getPages serverUrl endpoint extraParams
 
 getItems
-  :: forall err f t b
+  :: forall err f endpoint b params
    . DecodeJson b
   => DecodeJson (ApiError err)
   => MonadAff f
-  => ToResourceLink t b
+  => ToResourceLink endpoint b
+  => QueryParams endpoint params
   => Monoid b
   => ServerURL
-  -> t
+  -> endpoint
+  -> params
   -> Maybe Range
   -> f (Either (ClientError err) b)
-getItems serverUrl endpoint range = do
-  getPages serverUrl (toResourceLink endpoint) range <#> case _ of
+getItems serverUrl endpoint extraParams range = do
+  getPages serverUrl endpoint extraParams range <#> case _ of
     Left err -> Left err
     Right pages -> Right $ foldMap _.page pages
 
 getItems'
-  :: forall @err f endpoint b
+  :: forall @err f endpoint b params
    . MonadAff f
   => DecodeJson b
   => DecodeJson (ApiError err)
   => ToResourceLink endpoint b
+  => QueryParams endpoint params
   => Monoid b
   => ServerURL
   -> endpoint
+  -> params
   -> Maybe Range
   -> f (Either (ClientError err) b)
-getItems' serverUrl endpoint range = do
-  getPages' serverUrl endpoint range <#> case _ of
+getItems' serverUrl endpoint extraParams range = do
+  getPages' serverUrl endpoint extraParams range <#> case _ of
     Left err -> Left err
     Right pages -> Right $ foldMap _.page pages
 
 getResource'
-  :: forall @err a extraHeaders endpoint
+  :: forall @err a extraHeaders params endpoint
    . DecodeJson a
   => DecodeJson (ApiError err)
   -- => Row.Lacks "Accept" extraHeaders
   => Row.Lacks "Access-Control-Request-Headers" extraHeaders
   => Row.Homogeneous ("Access-Control-Request-Headers" :: String | extraHeaders) String
   => ToResourceLink endpoint a
+  => QueryParams endpoint params
   => ServerURL
   -> endpoint
+  -> params
   -> Record extraHeaders
   -> Aff (GetResourceResponse err { headers :: Headers, payload :: a, status :: Int })
-getResource' serverUrl path = getResource serverUrl (toResourceLink path)
+getResource' serverUrl endpoint extraParams = do
+  getResource serverUrl endpoint extraParams
 
 getPage'
-  :: forall a endpoint err
+  :: forall a endpoint err params
    . DecodeJson a
   => DecodeJson (ApiError err)
   => ToResourceLink endpoint a
+  => QueryParams endpoint params
   => ServerURL
   -> endpoint
+  -> params
   -> Maybe Range
   -> Aff (GetResourceResponse err ({ page :: a, nextRange :: Maybe Range }))
-getPage' serverUrl path = getPage serverUrl (toResourceLink path)
+getPage' serverUrl endpoint extraParams = do
+  getPage serverUrl endpoint extraParams
 
 foldMapMPages'
-  :: forall a b err m t
+  :: forall a b endpoint err m params
    . DecodeJson a
   => DecodeJson (ApiError err)
   => MonadAff m
   => Monoid b
-  => ToResourceLink t a
+  => ToResourceLink endpoint a
+  => QueryParams endpoint params
   => ServerURL
-  -> t
+  -> endpoint
+  -> params
   -> ({ currRange :: Maybe Range, page :: a } -> m { result :: b, stopFetching :: Boolean })
   -> Maybe Range
   -> m (Either (ClientError err) b)
-foldMapMPages' serverUrl path = foldMapMPages serverUrl (toResourceLink path)
+foldMapMPages' serverUrl endpoint extraParams = foldMapMPages serverUrl endpoint extraParams
 
 post
   :: forall err postRequest postResponse postResponseLinks getResponse getResponseLinks extraHeaders

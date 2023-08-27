@@ -5,6 +5,7 @@ import Prelude
 import CardanoMultiplatformLib (Bech32, CborHex, bech32ToString)
 import CardanoMultiplatformLib.Transaction (TransactionObject, TransactionWitnessSetObject)
 import CardanoMultiplatformLib.Types (unsafeBech32)
+import Contrib.Cardano as C
 import Contrib.Data.Argonaut (JsonParser, JsonParserResult, decodeFromString)
 import Contrib.Data.Argonaut.Generic.Record (class DecodeRecord, DecodeJsonFieldFn, decodeRecord, decodeNewtypedRecord)
 import Data.Argonaut (class DecodeJson, class EncodeJson, Json, JsonDecodeError(..), decodeJson, encodeJson, stringify)
@@ -32,6 +33,7 @@ import Foreign.Object (Object)
 import Foreign.Object as Object
 import Language.Marlowe.Core.V1.Semantics.Types as V1
 import Record as Record
+import Type.Proxy (Proxy)
 import Type.Row (type (+))
 import Type.Row.Homogeneous as Row
 
@@ -66,12 +68,16 @@ instance Show err => Show (ApiError err) where
   show (ApiError { message, error }) =
     "ApiError { message: " <> show message <> ", error: " <> show error <> " }"
 
+-- FIXME: move this part to `Contrib.Cardano`
+
 newtype TxId = TxId String
 
 derive instance Generic TxId _
 derive instance Newtype TxId _
 derive instance Eq TxId
 derive instance Ord TxId
+instance EncodeJson TxId where
+  encodeJson (TxId id) = encodeJson id
 instance DecodeJson TxId where
   decodeJson = map TxId <$> decodeJson
 
@@ -82,7 +88,9 @@ newtype TxOutRef = TxOutRef
 
 derive instance Generic TxOutRef _
 derive instance Eq TxOutRef
-derive instance Ord TxOutRef
+instance Ord TxOutRef where
+  compare (TxOutRef t1) (TxOutRef t2) =
+    compare (t1.txId /\ t1.txIx) (t2.txId /\ t2.txIx)
 derive instance Newtype TxOutRef _
 instance DecodeJson TxOutRef where
   decodeJson = decodeFromString $ String.split (String.Pattern "#") >>> case _ of
@@ -90,6 +98,8 @@ instance DecodeJson TxOutRef where
       txIx <- Int.fromString txIxStr
       pure $ TxOutRef { txId: TxId txId, txIx }
     _ -> Nothing
+instance EncodeJson TxOutRef where
+  encodeJson (TxOutRef { txId: TxId txId, txIx }) = encodeJson $ txId <> "#" <> show txIx
 
 txOutRefFromString :: String -> Maybe TxOutRef
 txOutRefFromString = String.split (String.Pattern "#") >>> case _ of
@@ -103,6 +113,28 @@ txOutRefToString (TxOutRef { txId: TxId txId, txIx }) = txId <> "#" <> show txIx
 
 txOutRefToUrlEncodedString :: TxOutRef -> String
 txOutRefToUrlEncodedString (TxOutRef { txId: TxId txId, txIx }) = txId <> "%23" <> show txIx
+
+newtype DatumHash = DatumHash String
+derive instance Eq DatumHash
+derive newtype instance EncodeJson DatumHash
+derive newtype instance DecodeJson DatumHash
+
+newtype TxOut = TxOut
+  { address :: Bech32
+  , value :: C.Value
+  , datumHash :: Maybe DatumHash
+  }
+derive instance Eq TxOut
+derive newtype instance EncodeJson TxOut
+derive newtype instance DecodeJson TxOut
+
+newtype AnUTxO = AnUTxO
+  { txOutRef :: TxOutRef
+  , txOut :: TxOut
+  }
+derive instance Eq AnUTxO
+derive newtype instance EncodeJson AnUTxO
+derive newtype instance DecodeJson AnUTxO
 
 type ContractId = TxOutRef
 
@@ -562,6 +594,22 @@ else instance ToResourceLink (IndexEndpoint postRequest postResponse postRespons
 -- | I'm closing the type class here for convenience. If we want to have other instances we can drop this approach.
 else instance (Newtype n t, ToResourceLink t a) => ToResourceLink n a where
   toResourceLink = toResourceLink <<< unwrap
+
+class QueryParams :: Type -> Type -> Constraint
+class QueryParams endpoint params | endpoint -> params where
+  toQueryParams :: Proxy endpoint -> params -> Array (String /\ (Maybe String))
+
+instance QueryParams ContractsEndpoint { tags :: Array String } where
+  toQueryParams _ { tags } = do
+    tag <- tags
+    pure $ "tag" /\ Just tag
+
+instance QueryParams ContractEndpoint {} where
+  toQueryParams _ _ = []
+instance QueryParams TransactionsEndpoint {} where
+  toQueryParams _ _ = []
+instance QueryParams TransactionEndpoint {} where
+  toQueryParams _ _ = []
 
 decodeResourceWithLink
   :: forall a linksRow
