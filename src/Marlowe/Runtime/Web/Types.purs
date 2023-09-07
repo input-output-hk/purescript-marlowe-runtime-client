@@ -5,6 +5,7 @@ import Prelude
 import CardanoMultiplatformLib (Bech32, CborHex, bech32ToString)
 import CardanoMultiplatformLib.Transaction (TransactionObject, TransactionWitnessSetObject)
 import CardanoMultiplatformLib.Types (unsafeBech32)
+import Contrib.Cardano (AssetId(..), assetIdToString)
 import Contrib.Cardano as C
 import Contrib.Data.Argonaut (JsonParser, JsonParserResult, decodeFromString)
 import Contrib.Data.Argonaut.Generic.Record (class DecodeRecord, DecodeJsonFieldFn, decodeRecord, decodeNewtypedRecord)
@@ -12,6 +13,7 @@ import Data.Argonaut (class DecodeJson, class EncodeJson, Json, JsonDecodeError(
 import Data.Argonaut.Core (isString)
 import Data.Argonaut.Decode.Combinators ((.:))
 import Data.Argonaut.Decode.Decoders (decodeJObject, decodeMaybe)
+import Data.Array as Array
 import Data.DateTime (DateTime)
 import Data.DateTime.ISO (ISO(..))
 import Data.Either (Either, note)
@@ -599,10 +601,14 @@ class QueryParams :: Type -> Type -> Constraint
 class QueryParams endpoint params | endpoint -> params where
   toQueryParams :: Proxy endpoint -> params -> Array (String /\ (Maybe String))
 
-instance QueryParams ContractsEndpoint { tags :: Array String } where
-  toQueryParams _ { tags } = do
-    tag <- tags
-    pure $ "tag" /\ Just tag
+instance QueryParams ContractsEndpoint { tags :: Array String, partyAddresses :: Array V1.Address, partyRoles :: Array AssetId } where
+  toQueryParams _ { tags, partyAddresses, partyRoles } =
+    let
+      tags' = map (\tag -> "tag" /\ Just tag) tags
+      partyAddresses' = map (\partyAddress -> "partyAddress" /\ Just partyAddress) partyAddresses
+      partyRoles' = map (\partyRole -> "partyRole" /\ Just (assetIdToString partyRole)) partyRoles
+    in
+      tags' `Array.union` partyAddresses' `Array.union` partyRoles'
 
 instance QueryParams ContractEndpoint {} where
   toQueryParams _ _ = []
