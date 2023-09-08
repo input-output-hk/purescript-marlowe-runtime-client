@@ -50,7 +50,6 @@
   , "tuples"
   , "typelevel-eval"
   , "typelevel-prelude"
-  , "unfoldable"
   , "unsafe-coerce"
   , "uri"
   , "variant"
