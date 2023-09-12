@@ -11,7 +11,6 @@ import Control.Monad.Loops (unfoldrM)
 import Control.Monad.Trans.Class (lift)
 import Data.Argonaut (class DecodeJson, Json, JsonDecodeError, decodeJson, stringify)
 import Data.Argonaut.Decode ((.:))
-import Data.Array as Array
 import Data.Bifunctor (lmap)
 import Data.Either (Either(..), either, fromRight)
 import Data.Foldable (fold, foldMap)
@@ -29,19 +28,17 @@ import Effect.Aff (Aff)
 import Effect.Aff.Class (class MonadAff, liftAff)
 import Fetch (RequestMode(..))
 import Fetch.Core.Headers (Headers, toArray)
-import Foreign.Object (Object, fromHomogeneous)
+import Foreign.Object (fromHomogeneous)
 import Foreign.Object as Object
 import Marlowe.Runtime.Web.Types (class EncodeHeaders, class EncodeJsonBody, class QueryParams, class ToResourceLink, ApiError, GetContractsResponse, IndexEndpoint(..), PostMerkleizationRequest, PostMerkleizationResponse, ResourceEndpoint(..), ResourceLink(..), ResourceWithLinks, ResourceWithLinksRow, ServerURL(..), decodeResourceWithLink, encodeHeaders, encodeJsonBody, toQueryParams, toResourceLink)
 import Parsing as Parsing
 import Prim.Row (class Lacks) as Row
-import Prim.RowList as RL
 import Record as R
 import Safe.Coerce (coerce)
 import Type.Prelude (Proxy(..))
 import Type.Row.Homogeneous (class Homogeneous) as Row
-import URI as URI
-import URI.AbsoluteURI as URI
-import URI.Extra.QueryPairs (Key, QueryPairs(..), Value, keyFromString, keyToString, valueFromString, valueToString) as URI
+import URI (RelativeRef(..), URI(..)) as URI
+import URI.Extra.QueryPairs (QueryPairs(..), keyFromString, keyToString, valueFromString, valueToString) as URI
 import URI.Extra.QueryPairs as URI.QueryPairs
 import URI.HostPortPair (HostPortPair) as URI
 import URI.HostPortPair as HostPortPair

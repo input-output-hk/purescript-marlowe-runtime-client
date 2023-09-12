@@ -5,7 +5,7 @@ import Prelude
 import CardanoMultiplatformLib (Bech32, CborHex, bech32ToString)
 import CardanoMultiplatformLib.Transaction (TransactionObject, TransactionWitnessSetObject)
 import CardanoMultiplatformLib.Types (unsafeBech32)
-import Contrib.Cardano (AssetId(..), assetIdToString)
+import Contrib.Cardano (AssetId(..), assetNameToString, policyIdToHexString)
 import Contrib.Cardano as C
 import Contrib.Data.Argonaut (JsonParser, JsonParserResult, decodeFromString)
 import Contrib.Data.Argonaut.Generic.Record (class DecodeRecord, DecodeJsonFieldFn, decodeRecord, decodeNewtypedRecord)
@@ -13,6 +13,7 @@ import Data.Argonaut (class DecodeJson, class EncodeJson, Json, JsonDecodeError(
 import Data.Argonaut.Core (isString)
 import Data.Argonaut.Decode.Combinators ((.:))
 import Data.Argonaut.Decode.Decoders (decodeJObject, decodeMaybe)
+import Data.Array (catMaybes)
 import Data.Array as Array
 import Data.DateTime (DateTime)
 import Data.DateTime.ISO (ISO(..))
@@ -52,6 +53,7 @@ newtype ApiError error = ApiError
   { message :: String
   , error :: error
   }
+
 derive instance Generic (ApiError err) _
 derive instance Newtype (ApiError err) _
 
@@ -80,6 +82,7 @@ derive instance Eq TxId
 derive instance Ord TxId
 instance EncodeJson TxId where
   encodeJson (TxId id) = encodeJson id
+
 instance DecodeJson TxId where
   decodeJson = map TxId <$> decodeJson
 
@@ -93,6 +96,7 @@ derive instance Eq TxOutRef
 instance Ord TxOutRef where
   compare (TxOutRef t1) (TxOutRef t2) =
     compare (t1.txId /\ t1.txIx) (t2.txId /\ t2.txIx)
+
 derive instance Newtype TxOutRef _
 instance DecodeJson TxOutRef where
   decodeJson = decodeFromString $ String.split (String.Pattern "#") >>> case _ of
@@ -100,6 +104,7 @@ instance DecodeJson TxOutRef where
       txIx <- Int.fromString txIxStr
       pure $ TxOutRef { txId: TxId txId, txIx }
     _ -> Nothing
+
 instance EncodeJson TxOutRef where
   encodeJson (TxOutRef { txId: TxId txId, txIx }) = encodeJson $ txId <> "#" <> show txIx
 
@@ -117,6 +122,7 @@ txOutRefToUrlEncodedString :: TxOutRef -> String
 txOutRefToUrlEncodedString (TxOutRef { txId: TxId txId, txIx }) = txId <> "%23" <> show txIx
 
 newtype DatumHash = DatumHash String
+
 derive instance Eq DatumHash
 derive newtype instance EncodeJson DatumHash
 derive newtype instance DecodeJson DatumHash
@@ -126,6 +132,7 @@ newtype TxOut = TxOut
   , value :: C.Value
   , datumHash :: Maybe DatumHash
   }
+
 derive instance Eq TxOut
 derive newtype instance EncodeJson TxOut
 derive newtype instance DecodeJson TxOut
@@ -134,6 +141,7 @@ newtype AnUTxO = AnUTxO
   { txOutRef :: TxOutRef
   , txOut :: TxOut
   }
+
 derive instance Eq AnUTxO
 derive newtype instance EncodeJson AnUTxO
 derive newtype instance DecodeJson AnUTxO
@@ -601,19 +609,32 @@ class QueryParams :: Type -> Type -> Constraint
 class QueryParams endpoint params | endpoint -> params where
   toQueryParams :: Proxy endpoint -> params -> Array (String /\ (Maybe String))
 
-instance QueryParams ContractsEndpoint { tags :: Array String, partyAddresses :: Array V1.Address, partyRoles :: Array AssetId } where
+instance QueryParams ContractsEndpoint { tags :: Array String, partyAddresses :: Array Bech32, partyRoles :: Array AssetId } where
   toQueryParams _ { tags, partyAddresses, partyRoles } =
     let
       tags' = map (\tag -> "tag" /\ Just tag) tags
-      partyAddresses' = map (\partyAddress -> "partyAddress" /\ Just partyAddress) partyAddresses
-      partyRoles' = map (\partyRole -> "partyRole" /\ Just (assetIdToString partyRole)) partyRoles
+      partyAddresses' = map (\partyAddress -> Just <<< bech32ToString <$> "partyAddress" /\ partyAddress) partyAddresses
+      partyRoles' = catMaybes $ map
+        ( \partyRole -> do
+            role <- assetToString partyRole
+            pure $ "partyRole" /\ Just role
+        )
+        partyRoles
     in
       tags' `Array.union` partyAddresses' `Array.union` partyRoles'
 
+assetToString :: AssetId -> Maybe String
+assetToString AdaAssetId = Nothing
+assetToString (AssetId policyId assetName) = do
+  name <- assetNameToString assetName
+  Just $ policyIdToHexString policyId <> "." <> name
+
 instance QueryParams ContractEndpoint {} where
   toQueryParams _ _ = []
+
 instance QueryParams TransactionsEndpoint {} where
   toQueryParams _ _ = []
+
 instance QueryParams TransactionEndpoint {} where
   toQueryParams _ _ = []
 

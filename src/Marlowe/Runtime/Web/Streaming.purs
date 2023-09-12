@@ -49,7 +49,7 @@ import Effect.Ref as Ref
 import Halogen.Subscription (Listener)
 import Halogen.Subscription as Subscription
 import Marlowe.Runtime.Web.Client (foldMapMContractPages, getPages', getResource')
-import Marlowe.Runtime.Web.Types (class QueryParams, ContractEndpoint, ContractId, ContractState, ContractsEndpoint(..), GetContractResponse, GetContractsResponse, ServerURL, TransactionEndpoint, TransactionsEndpoint, TxHeader, api)
+import Marlowe.Runtime.Web.Types (class QueryParams, ContractEndpoint, ContractId, ContractState, ContractsEndpoint, GetContractResponse, GetContractsResponse, ServerURL, TransactionEndpoint, TransactionsEndpoint, TxHeader, api)
 
 -- | API CAUTION: We update the state in chunks but send the events one by one. This means that
 -- | the event handler can see some state changes (in `getLiveState`) before it receives some notifications.
