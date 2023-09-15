@@ -5,24 +5,9 @@ import Prelude
 import Data.Map (Map)
 import Data.Map as Map
 import Data.Tuple.Nested ((/\))
-import Marlowe.Runtime.Web.Types (TxId(..), TxOutRef(..))
+import Marlowe.Runtime.Web.Types (NetworkId(..), NetworkMagic(..), TxId(..), TxOutRef(..))
 
 -- Partial clone of marlowe-runtime/src/Language/Marlowe/Runtime/Core/ScriptRegistry.hs
-
-newtype NetworkMagic = NetworkMagic Int
-derive instance Eq NetworkMagic
-derive instance Ord NetworkMagic
-
-data NetworkId = Mainnet | Testnet NetworkMagic
-derive instance Eq NetworkId
-
-instance Ord NetworkId where
-  compare Mainnet Mainnet = EQ
-  compare Mainnet _ = LT
-  compare _ Mainnet = GT
-  compare (Testnet (NetworkMagic a)) (Testnet (NetworkMagic b)) =
-    compare a b
-
 newtype ReferenceScriptUtxo = ReferenceScriptUtxo TxOutRef
 derive instance Eq ReferenceScriptUtxo
 derive instance Ord ReferenceScriptUtxo
