@@ -1,5 +1,4 @@
-{ name = "my-project"
-, dependencies =
+{ dependencies =
   [ "aff"
   , "aff-promise"
   , "argonaut"
@@ -54,6 +53,9 @@
   , "uri"
   , "variant"
   ]
+, license = "apache"
+, name = "my-project"
 , packages = ./packages.dhall
+, repository = "https://github.com/input-output-hk/purescript-marlowe-runtime-client"
 , sources = [ "src/**/*.purs", "test/**/*.purs" ]
 }
