@@ -6,31 +6,35 @@ import Contrib.Data.Argonaut (JsonParser)
 import Contrib.Data.Argonaut.Generic.Record (class DecodeRecord, DecodeJsonFieldFn)
 import Contrib.Fetch (FetchError, StatusCode, fetchEither, jsonBody)
 import Control.Alt ((<|>))
-import Control.Monad.Except (ExceptT(..), runExceptT, throwError)
+import Control.Monad.Except (ExceptT(..), except, runExceptT, throwError)
 import Control.Monad.Loops (unfoldrM)
 import Control.Monad.Trans.Class (lift)
-import Data.Argonaut (class DecodeJson, Json, JsonDecodeError, decodeJson, stringify)
+import Data.Argonaut (class DecodeJson, Json, JsonDecodeError, decodeJson, jsonParser, stringify)
 import Data.Argonaut.Decode ((.:))
 import Data.Bifunctor (lmap)
-import Data.Either (Either(..), either, fromRight)
+import Data.Either (Either(..), either, fromRight, hush, note)
 import Data.Foldable (fold, foldMap)
+import Data.Foldable as Foldable
 import Data.Generic.Rep (class Generic)
 import Data.HTTP.Method (Method(..))
+import Data.Int as Int
 import Data.List (List)
 import Data.List as List
 import Data.Map (fromFoldable, lookup)
 import Data.Maybe (Maybe(..))
 import Data.Newtype (class Newtype, unwrap)
 import Data.Show.Generic (genericShow)
+import Data.String as String
 import Data.String.CaseInsensitive (CaseInsensitiveString(..))
 import Data.Tuple.Nested (type (/\), (/\))
 import Effect.Aff (Aff)
 import Effect.Aff.Class (class MonadAff, liftAff)
 import Fetch (RequestMode(..))
 import Fetch.Core.Headers (Headers, toArray)
+import Fetch.Core.Headers as Headers
 import Foreign.Object (fromHomogeneous)
 import Foreign.Object as Object
-import Marlowe.Runtime.Web.Types (class EncodeHeaders, class EncodeJsonBody, class QueryParams, class ToResourceLink, ApiError, GetContractsResponse, IndexEndpoint(..), PostMerkleizationRequest, PostMerkleizationResponse, ResourceEndpoint(..), ResourceLink(..), ResourceWithLinks, ResourceWithLinksRow, ServerURL(..), decodeResourceWithLink, encodeHeaders, encodeJsonBody, toQueryParams, toResourceLink)
+import Marlowe.Runtime.Web.Types (class EncodeHeaders, class EncodeJsonBody, class QueryParams, class ToResourceLink, ApiError, GetContractsResponse, HealthCheck(..), IndexEndpoint(..), NetworkId(..), NetworkMagic(..), PostMerkleizationRequest, PostMerkleizationResponse, ResourceEndpoint(..), ResourceLink(..), ResourceWithLinks, ResourceWithLinksRow, RuntimeVersion(..), ServerURL(..), decodeResourceWithLink, encodeHeaders, encodeJsonBody, toQueryParams, toResourceLink)
 import Parsing as Parsing
 import Prim.Row (class Lacks) as Row
 import Record as R
@@ -48,6 +52,7 @@ import URI.URIRef as URIRef
 data ClientError err
   = FetchError FetchError
   | ResponseDecodingError JsonDecodeError
+  | HealthCheckError String
   | MerkleizationError
   | ServerApiError (ApiError err)
 
@@ -119,6 +124,49 @@ getResource (ServerURL serverUrl) endpoint extraParams extraHeaders = do
     lift (jsonBody res) >>= decodeResponse' status >>> case _ of
       Left err -> throwError err
       Right payload -> pure { payload, headers: resHeaders, status }
+
+-- Healthcheck endpoint is pretty specific because it doesn't return a JSON object
+-- but encodes the response in the headers.
+getHealthCheck
+  :: forall err
+   . DecodeJson (ApiError String)
+  => ServerURL
+  -> Aff (Either (ClientError err) HealthCheck)
+getHealthCheck (ServerURL serverUrl) = runExceptT do
+  let
+    url = serverUrl <> "/healthcheck"
+    headers :: { "Accept" :: String }
+    headers =
+      { "Accept": "application/json" }
+
+  { headers: resHeaders } <- ExceptT $ fetchEither url { headers } allowedStatusCodes FetchError
+  let
+    headersArray = Headers.toArray resHeaders <#> \(name /\ value) -> String.toLower name /\ value
+
+    lookupDecodeJson :: forall a. DecodeJson a => String -> ExceptT (ClientError err) Aff a
+    lookupDecodeJson headerName = except $ case Foldable.lookup headerName headersArray >>= (jsonParser >>> hush) of
+      Just headerValueJson -> lmap (HealthCheckError <<< show) $ decodeJson headerValueJson
+      Nothing -> throwError $ HealthCheckError $ "Missing " <> headerName <> " header in: " <> show headersArray
+
+  networkId <- except $ note (HealthCheckError "Missing x-network-id header") do
+    -- Either: "mainnet" or 1 or 2
+    headerValueString <- Foldable.lookup "x-network-id" headersArray
+    case headerValueString of
+      "mainnet" -> pure Mainnet
+      str -> do
+        magic <- Int.fromString str
+        pure $ Testnet (NetworkMagic magic)
+
+  nodeTip <- lookupDecodeJson "x-node-tip"
+  runtimeChainTip <- lookupDecodeJson "x-runtime-chain-tip"
+  runtimeTip <- lookupDecodeJson "x-runtime-tip"
+  runtimeVersion <- except $ note (HealthCheckError "Missing x-runtime-version header") do
+    version <- Foldable.lookup "x-runtime-version" headersArray
+    pure $ RuntimeVersion version
+
+  pure $ HealthCheck
+    { networkId, nodeTip, runtimeChainTip, runtimeTip, runtimeVersion }
+
 
 merkleize
   :: forall err

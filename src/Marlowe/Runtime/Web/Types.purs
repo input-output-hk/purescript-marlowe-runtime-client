@@ -345,6 +345,50 @@ instance DecodeJson Tags where
     (obj :: Object Json) <- decodeJson json
     pure <<< Tags <<< Map.fromFoldableWithIndex $ obj
 
+
+newtype NetworkMagic = NetworkMagic Int
+derive instance Eq NetworkMagic
+derive instance Ord NetworkMagic
+
+data NetworkId = Mainnet | Testnet NetworkMagic
+derive instance Eq NetworkId
+instance EncodeJson NetworkId where
+  encodeJson = case _ of
+    Mainnet -> encodeJson "mainnet"
+    Testnet (NetworkMagic magic) -> encodeJson magic
+
+
+instance Ord NetworkId where
+  compare Mainnet Mainnet = EQ
+  compare Mainnet _ = LT
+  compare _ Mainnet = GT
+  compare (Testnet (NetworkMagic a)) (Testnet (NetworkMagic b)) =
+    compare a b
+
+-- x-network-id: mainnet
+-- x-node-tip: {"blockHeader":{"blockHeaderHash":"109c10446e6b30f215e23d89ec6b1c70e8e6748161ae55ff44258896df261add","blockNo":9291742,"slotNo":103196413},"slotTimeUTC":"2023-09-15T07:25:04Z"}
+-- x-runtime-chain-tip: {"blockHeader":{"blockHeaderHash":"109c10446e6b30f215e23d89ec6b1c70e8e6748161ae55ff44258896df261add","blockNo":9291742,"slotNo":103196413},"slotTimeUTC":"2023-09-15T07:25:04Z"}
+-- x-runtime-tip: {"blockHeader":{"blockHeaderHash":"1ea1ea09d85b0d4edc4ae17a19ac31121d967405191c1cca4bfb72adfe8ed797","blockNo":9235640,"slotNo":102047068},"slotTimeUTC":"2023-09-02T00:09:19Z"}
+-- x-runtime-version: 0.0.4
+type TipInfo =
+  { blockHeader :: BlockHeader
+  -- , slotTimeUTC :: Instant
+  }
+
+newtype RuntimeVersion = RuntimeVersion String
+derive instance Newtype RuntimeVersion _
+derive newtype instance EncodeJson RuntimeVersion
+derive newtype instance DecodeJson RuntimeVersion
+
+newtype HealthCheck = HealthCheck
+  { networkId :: NetworkId
+  , nodeTip :: TipInfo
+  , runtimeChainTip :: TipInfo
+  , runtimeTip :: TipInfo
+  , runtimeVersion :: RuntimeVersion
+  }
+
+
 type ContractHeadersRowBase r =
   ( contractId :: TxOutRef
   , roleTokenMintingPolicyId :: PolicyId
