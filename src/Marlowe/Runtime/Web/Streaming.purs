@@ -72,7 +72,7 @@ type ContractMap = Map ContractId GetContractsResponse
 
 newtype ContractStream = ContractStream
   { emitter :: Subscription.Emitter ContractEvent
-  , getLiveState :: Effect ContractMap
+  , getLiveState :: Effect (Maybe ContractMap)
   , getState :: Aff ContractMap
   , start :: Aff Unit
   }
@@ -134,7 +134,7 @@ contracts (PollingInterval pollingInterval) (RequestInterval requestInterval) pa
 
   pure $ ContractStream
     { emitter
-    , getLiveState: Ref.read contractsRef
+    , getLiveState: Just <$> Ref.read contractsRef
     , getState: AVar.read contractsAVar
     , start
     }
@@ -150,7 +150,7 @@ type ContractTransactionsEvent = ContractId
 
 newtype ContractTransactionsStream = ContractTransactionsStream
   { emitter :: Subscription.Emitter ContractTransactionsEvent
-  , getLiveState :: Effect ContractTransactionsMap
+  , getLiveState :: Effect (Maybe ContractTransactionsMap)
   , getState :: Aff ContractTransactionsMap
   , start :: Aff Unit
   }
@@ -183,7 +183,7 @@ contractsTransactions (PollingInterval pollingInterval) requestInterval getEndpo
 
   pure $ ContractTransactionsStream
     { emitter
-    , getLiveState: Ref.read stateRef
+    , getLiveState: Just <$> Ref.read stateRef
     , getState: AVar.read stateAVar
     , start
     }
@@ -243,7 +243,7 @@ type ContractStateEvent = ContractId /\ { new :: ContractState, old :: Maybe Con
 
 newtype ContractStateStream = ContractStateStream
   { emitter :: Subscription.Emitter ContractStateEvent
-  , getLiveState :: Effect ContractStateMap
+  , getLiveState :: Effect (Maybe ContractStateMap)
   , getState :: Aff ContractStateMap
   , start :: Aff Unit
   }
@@ -276,7 +276,7 @@ contractsStates (PollingInterval pollingInterval) requestInterval getEndpoints s
       delay pollingInterval
   pure $ ContractStateStream
     { emitter
-    , getLiveState: Ref.read stateRef
+    , getLiveState: Just <$> Ref.read stateRef
     , getState: AVar.read stateAVar
     , start
     }
@@ -340,7 +340,7 @@ data ContractWithTransactionsEvent
 
 newtype ContractWithTransactionsStream = ContractWithTransactionsStream
   { emitter :: Subscription.Emitter ContractWithTransactionsEvent
-  , getLiveState :: Effect ContractWithTransactionsMap
+  , getLiveState :: Effect (Maybe ContractWithTransactionsMap)
   , getState :: Aff ContractWithTransactionsMap
   , start :: Aff Unit
   }
@@ -353,11 +353,14 @@ contractsWithTransactions (ContractStream contractStream) (ContractStateStream c
       contractTransactionsMap <- contractTransactionsStream.getLiveState
       contractStateMap <- contractStateStream.getLiveState
 
-      forWithIndex contractMap \contractId contract -> do
-        let
-          transactions = fromMaybe [] $ Map.lookup contractId contractTransactionsMap
-          contractState = Map.lookup contractId contractStateMap
-        pure { contract, contractState, transactions }
+      pure $ case contractMap of
+          Just cm ->
+            forWithIndex cm \contractId contract -> do
+              let
+                transactions = fromMaybe [] $ Map.lookup contractId =<< contractTransactionsMap
+                contractState = Map.lookup contractId =<< contractStateMap
+              Just { contract, contractState, transactions }
+          Nothing -> Nothing 
 
     getState = do
       contractMap <- contractStream.getState
