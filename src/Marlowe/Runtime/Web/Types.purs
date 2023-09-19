@@ -2,11 +2,10 @@ module Marlowe.Runtime.Web.Types where
 
 import Prelude
 
+import Cardano as C
 import CardanoMultiplatformLib (Bech32, CborHex, bech32ToString)
 import CardanoMultiplatformLib.Transaction (TransactionObject, TransactionWitnessSetObject)
 import CardanoMultiplatformLib.Types (unsafeBech32)
-import Contrib.Cardano (AssetId(..), assetNameToString, policyIdToHexString)
-import Contrib.Cardano as C
 import Contrib.Data.Argonaut (JsonParser, JsonParserResult, decodeFromString)
 import Contrib.Data.Argonaut.Generic.Record (class DecodeRecord, DecodeJsonFieldFn, decodeRecord, decodeNewtypedRecord)
 import Data.Argonaut (class DecodeJson, class EncodeJson, Json, JsonDecodeError(..), decodeJson, encodeJson, stringify)
@@ -653,7 +652,7 @@ class QueryParams :: Type -> Type -> Constraint
 class QueryParams endpoint params | endpoint -> params where
   toQueryParams :: Proxy endpoint -> params -> Array (String /\ (Maybe String))
 
-instance QueryParams ContractsEndpoint { tags :: Array String, partyAddresses :: Array Bech32, partyRoles :: Array AssetId } where
+instance QueryParams ContractsEndpoint { tags :: Array String, partyAddresses :: Array Bech32, partyRoles :: Array C.AssetId } where
   toQueryParams _ { tags, partyAddresses, partyRoles } =
     let
       tags' = map (\tag -> "tag" /\ Just tag) tags
@@ -667,11 +666,11 @@ instance QueryParams ContractsEndpoint { tags :: Array String, partyAddresses ::
     in
       tags' `Array.union` partyAddresses' `Array.union` partyRoles'
 
-assetToString :: AssetId -> Maybe String
-assetToString AdaAssetId = Nothing
-assetToString (AssetId policyId assetName) = do
-  name <- assetNameToString assetName
-  Just $ policyIdToHexString policyId <> "." <> name
+assetToString :: C.AssetId -> Maybe String
+assetToString C.AdaAssetId = Nothing
+assetToString (C.AssetId policyId assetName) = do
+  name <- C.assetNameToString assetName
+  Just $ C.policyIdToHexString policyId <> "." <> name
 
 instance QueryParams ContractEndpoint {} where
   toQueryParams _ _ = []
