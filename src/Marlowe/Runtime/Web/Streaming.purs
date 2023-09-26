@@ -42,7 +42,7 @@ import Data.TraversableWithIndex (forWithIndex)
 import Data.Tuple (fst, snd)
 import Data.Tuple.Nested (type (/\), (/\))
 import Effect (Effect)
-import Effect.Aff (Aff, Milliseconds(..), delay)
+import Effect.Aff (Aff, Milliseconds, delay)
 import Effect.Aff.AVar as AVar
 import Effect.Class (liftEffect)
 import Effect.Ref as Ref
@@ -289,9 +289,11 @@ contractsStates (PollingInterval pollingInterval) requestInterval getEndpoints s
       let
         endpoint = unsafeCoerce $ "/contracts/" <> txOutRefToString contractId
       previousState <- liftEffect $ Ref.read stateRef
-      { contractsStates: newState } <- fetchContractsStates (Map.singleton contractId endpoint) previousState listener (RequestInterval $ Milliseconds 0.0) serverUrl
-      liftEffect do
-        Ref.modify_ (\s -> Map.update (\_ -> Map.lookup contractId newState) contractId s) stateRef
+      newState <- fetchContractState contractId endpoint (Map.lookup contractId previousState) listener serverUrl
+      case newState of
+        Just { contractState } -> liftEffect do
+          Ref.modify_ (\s -> Map.update (\_ -> Just contractState) contractId s) stateRef
+        _ -> pure unit
 
   pure $ ContractStateStream
     { emitter
