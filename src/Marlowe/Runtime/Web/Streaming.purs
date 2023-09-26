@@ -34,7 +34,7 @@ import Control.Parallel (parSequence)
 import Data.Filterable (filter)
 import Data.Foldable (foldMap)
 import Data.Map (Map)
-import Data.Map (catMaybes, empty, filter, fromFoldable, lookup, union) as Map
+import Data.Map (catMaybes, empty, filter, fromFoldable, lookup, singleton, union, update) as Map
 import Data.Maybe (Maybe(..), fromMaybe)
 import Data.Newtype as Newtype
 import Data.Traversable (for_)
@@ -42,14 +42,15 @@ import Data.TraversableWithIndex (forWithIndex)
 import Data.Tuple (fst, snd)
 import Data.Tuple.Nested (type (/\), (/\))
 import Effect (Effect)
-import Effect.Aff (Aff, Milliseconds, delay)
+import Effect.Aff (Aff, Milliseconds(..), delay)
 import Effect.Aff.AVar as AVar
 import Effect.Class (liftEffect)
 import Effect.Ref as Ref
 import Halogen.Subscription (Listener)
 import Halogen.Subscription as Subscription
 import Marlowe.Runtime.Web.Client (foldMapMContractPages, getPages', getResource')
-import Marlowe.Runtime.Web.Types (class QueryParams, ContractEndpoint, ContractId, ContractState, ContractsEndpoint, GetContractResponse, GetContractsResponse, ServerURL, TransactionEndpoint, TransactionsEndpoint, TxHeader, api)
+import Marlowe.Runtime.Web.Types (class QueryParams, ContractEndpoint, ContractId, ContractState, ContractsEndpoint, GetContractResponse, GetContractsResponse, ServerURL, TransactionEndpoint, TransactionsEndpoint, TxHeader, api, txOutRefToString)
+import Unsafe.Coerce (unsafeCoerce)
 
 -- | API CAUTION: We update the state in chunks but send the events one by one. This means that
 -- | the event handler can see some state changes (in `getLiveState`) before it receives some notifications.
@@ -152,6 +153,7 @@ newtype ContractTransactionsStream = ContractTransactionsStream
   { emitter :: Subscription.Emitter ContractTransactionsEvent
   , getLiveState :: Effect ContractTransactionsMap
   , getState :: Aff ContractTransactionsMap
+  , sync :: ContractId -> Aff Unit
   , start :: Aff Unit
   }
 
@@ -181,11 +183,20 @@ contractsTransactions (PollingInterval pollingInterval) requestInterval getEndpo
       AVar.put newState stateAVar
       delay pollingInterval
 
+    sync contractId = do
+      let
+        endpoint = unsafeCoerce $ "/contracts/" <> txOutRefToString contractId <> "/transactions"
+      previousState <- liftEffect $ Ref.read stateRef
+      { contractsTransactions: newState } <- fetchContractsTransactions (Map.singleton contractId endpoint) previousState listener requestInterval serverUrl
+      liftEffect do
+        Ref.modify_ (\s -> Map.update (\_ -> Map.lookup contractId newState) contractId s) stateRef
+
   pure $ ContractTransactionsStream
     { emitter
     , getLiveState: Ref.read stateRef
     , getState: AVar.read stateAVar
     , start
+    , sync
     }
 
 fetchContractsTransactions
@@ -202,11 +213,9 @@ fetchContractsTransactions endpoints prevContractTransactionMap listener (Reques
   items <- map Map.catMaybes $ forWithIndex endpoints \contractId transactionEndpoint -> do
     let
       action = do
-        let
-          getTransactions = do
-            pages <- getPages' @String serverUrl transactionEndpoint {} Nothing >>= Effect.liftEither
-            pure $ foldMap _.page pages
-        (txHeaders :: Array { resource :: TxHeader, links :: { transaction :: TransactionEndpoint } }) <- getTransactions
+        (txHeaders :: Array { resource :: TxHeader, links :: { transaction :: TransactionEndpoint } }) <- do
+          pages <- getPages' @String serverUrl transactionEndpoint {} Nothing >>= Effect.liftEither
+          pure $ foldMap _.page pages
         delay requestInterval
         let
           prevTransactions = Map.lookup contractId prevContractTransactionMap
@@ -246,6 +255,7 @@ newtype ContractStateStream = ContractStateStream
   , getLiveState :: Effect ContractStateMap
   , getState :: Aff ContractStateMap
   , start :: Aff Unit
+  , sync :: ContractId -> Aff Unit
   }
 
 -- | FIXME: the same as above - take closer at error handling woudn't this component break in the case of network error?
@@ -274,10 +284,20 @@ contractsStates (PollingInterval pollingInterval) requestInterval getEndpoints s
       AVar.put newState stateAVar
 
       delay pollingInterval
+
+    sync contractId = do
+      let
+        endpoint = unsafeCoerce $ "/contracts/" <> txOutRefToString contractId
+      previousState <- liftEffect $ Ref.read stateRef
+      { contractsStates: newState } <- fetchContractsStates (Map.singleton contractId endpoint) previousState listener (RequestInterval $ Milliseconds 0.0) serverUrl
+      liftEffect do
+        Ref.modify_ (\s -> Map.update (\_ -> Map.lookup contractId newState) contractId s) stateRef
+
   pure $ ContractStateStream
     { emitter
     , getLiveState: Ref.read stateRef
     , getState: AVar.read stateAVar
+    , sync
     , start
     }
 
@@ -295,9 +315,7 @@ fetchContractsStates endpoints prevContractStateMap listener (RequestInterval re
   items <- map Map.catMaybes $ forWithIndex endpoints \contractId endpoint -> do
     let
       action = do
-        let
-          getContractState = (getResource' @String serverUrl endpoint {} {} >>= Effect.liftEither) <#> _.payload.resource -- <#> foldMap _.page
-        (newContractState :: ContractState) <- getContractState
+        newContractState <- getResource' @String serverUrl endpoint {} {} >>= Effect.liftEither <#> _.payload.resource
         delay requestInterval
         let
           oldContractState = Map.lookup contractId prevContractStateMap
@@ -342,6 +360,7 @@ newtype ContractWithTransactionsStream = ContractWithTransactionsStream
   { emitter :: Subscription.Emitter ContractWithTransactionsEvent
   , getLiveState :: Effect ContractWithTransactionsMap
   , getState :: Aff ContractWithTransactionsMap
+  , sync :: ContractId -> Aff Unit
   , start :: Aff Unit
   }
 
@@ -374,13 +393,17 @@ contractsWithTransactions (ContractStream contractStream) (ContractStateStream c
       <|> (ContractTransactionsEvent <$> contractTransactionsStream.emitter)
       <|> (ContractStateEvent <$> contractStateStream.emitter)
 
+    sync contractId = do
+      contractStateStream.sync contractId
+      contractTransactionsStream.sync contractId
+
     start = map (const unit) $ parSequence
       [ void $ contractStateStream.start
       , void $ contractTransactionsStream.start
       , void $ contractStream.start
       ]
 
-  ContractWithTransactionsStream { emitter, getLiveState, getState, start }
+  ContractWithTransactionsStream { emitter, getLiveState, getState, sync, start }
 
 mkContractsWithTransactions
   :: forall params
