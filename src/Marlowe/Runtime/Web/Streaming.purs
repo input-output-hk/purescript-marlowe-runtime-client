@@ -34,7 +34,7 @@ import Control.Parallel (parSequence)
 import Data.Filterable (filter)
 import Data.Foldable (foldMap)
 import Data.Map (Map)
-import Data.Map (catMaybes, empty, filter, fromFoldable, lookup, singleton, union, update) as Map
+import Data.Map (catMaybes, empty, filter, fromFoldable, values, lookup, singleton, union, update) as Map
 import Data.Maybe (Maybe(..), fromMaybe)
 import Data.Newtype as Newtype
 import Data.Traversable (for_)
@@ -301,6 +301,38 @@ contractsStates (PollingInterval pollingInterval) requestInterval getEndpoints s
     , start
     }
 
+fetchContractState
+  :: ContractId
+  -> ContractEndpoint
+  -> Maybe ContractState
+  -> Listener ContractStateEvent
+  -> ServerURL
+  -> Aff
+       ( Maybe
+           { contractState :: ContractState
+           , notify :: Effect Unit
+           }
+       )
+fetchContractState contractId endpoint oldContractState listener serverUrl = do
+  item <- do
+    let
+      action = do
+        newContractState <- getResource' @String serverUrl endpoint {} {} >>= Effect.liftEither <#> _.payload.resource
+        let
+          change =
+            if oldContractState /= Just newContractState then Nothing
+            else pure { old: oldContractState, new: newContractState }
+        pure $ Just $ change /\ newContractState
+    action `catchError` \_ -> do
+      pure Nothing
+
+  case item of
+    Just (Just change /\ newState) -> pure $ Just
+      { contractState: newState
+      , notify: Subscription.notify listener (contractId /\ change)
+      }
+    _ -> pure Nothing
+
 fetchContractsStates
   :: ContractEndpointsSource
   -> ContractStateMap
@@ -312,30 +344,14 @@ fetchContractsStates
        , notify :: Effect Unit
        }
 fetchContractsStates endpoints prevContractStateMap listener (RequestInterval requestInterval) serverUrl = do
-  items <- map Map.catMaybes $ forWithIndex endpoints \contractId endpoint -> do
+  (items :: Map ContractId ({ contractState :: ContractState, notify :: Effect Unit })) <- map Map.catMaybes $ forWithIndex endpoints \contractId endpoint -> do
     let
-      action = do
-        newContractState <- getResource' @String serverUrl endpoint {} {} >>= Effect.liftEither <#> _.payload.resource
-        delay requestInterval
-        let
-          oldContractState = Map.lookup contractId prevContractStateMap
-          change =
-            if oldContractState /= Just newContractState then Nothing
-            else pure { old: oldContractState, new: newContractState }
-        pure $ Just $ change /\ contractId /\ newContractState
-    action `catchError` \_ -> do
-      pure Nothing
-
-  let
-    doNotify =
-      for_ items $ case _ of
-        (Just change /\ contractId /\ _) -> do
-          Subscription.notify listener (contractId /\ change)
-        _ -> pure unit
-
+      oldContractState = Map.lookup contractId prevContractStateMap
+    delay requestInterval
+    fetchContractState contractId endpoint oldContractState listener serverUrl
   pure
-    { contractsStates: Map.fromFoldable (items <#> snd)
-    , notify: doNotify
+    { contractsStates: map _.contractState items
+    , notify: for_ (Map.values items) _.notify
     }
 
 type TxHeaderWithEndpoint = TxHeader /\ TransactionEndpoint
