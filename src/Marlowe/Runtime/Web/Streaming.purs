@@ -49,7 +49,7 @@ import Effect.Ref as Ref
 import Halogen.Subscription (Listener)
 import Halogen.Subscription as Subscription
 import Marlowe.Runtime.Web.Client (foldMapMContractPages, getPages', getResource')
-import Marlowe.Runtime.Web.Types (class QueryParams, ContractEndpoint, ContractId, ContractState, ContractsEndpoint, GetContractResponse, GetContractsResponse, ServerURL, TransactionEndpoint, TransactionsEndpoint, TxHeader, api, txOutRefToString)
+import Marlowe.Runtime.Web.Types (class QueryParams, ContractEndpoint, ContractHeader(..), ContractId, ContractState(..), ContractsEndpoint, GetContractResponse, GetContractsResponse, ServerURL, TransactionEndpoint, TransactionsEndpoint, TxHeader, api, txOutRefToString)
 import Unsafe.Coerce (unsafeCoerce)
 
 -- | API CAUTION: We update the state in chunks but send the events one by one. This means that
@@ -76,6 +76,7 @@ newtype ContractStream = ContractStream
   , getLiveState :: Effect ContractMap
   , getState :: Aff ContractMap
   , start :: Aff Unit
+  , sync :: ContractId -> Aff Unit
   }
 
 newtype MaxPages = MaxPages Int
@@ -133,12 +134,49 @@ contracts (PollingInterval pollingInterval) (RequestInterval requestInterval) pa
       AVar.put nextContracts contractsAVar
       delay pollingInterval
 
+    sync contractId = do
+      let
+        endpoint = unsafeCoerce $ "/contracts/" <> txOutRefToString contractId
+      void $ fetchContractHeader contractId endpoint listener serverUrl contractsRef
+
   pure $ ContractStream
     { emitter
     , getLiveState: Ref.read contractsRef
     , getState: AVar.read contractsAVar
     , start
+    , sync
     }
+
+contractStateToHeader :: ContractState -> ContractHeader
+contractStateToHeader (ContractState { contractId, roleTokenMintingPolicyId, version, metadata, tags, status, block }) =
+  ContractHeader { contractId, roleTokenMintingPolicyId, version, metadata, tags, status, block }
+
+fetchContractHeader
+  :: ContractId
+  -> ContractEndpoint
+  -> Listener ContractEvent
+  -> ServerURL
+  -> Ref.Ref (Map ContractId GetContractsResponse)
+  -> Aff (Maybe GetContractsResponse)
+fetchContractHeader contractId endpoint listener serverUrl contractsRef = do
+  let
+    action = do
+      previousContract <- liftEffect $ Ref.read contractsRef
+      newContractState <- getResource' @String serverUrl endpoint {} {} >>= Effect.liftEither <#> _.payload.resource
+      let
+        oldContractResponse = Map.lookup contractId previousContract
+        newContractResponse = { links: { contract: endpoint, transactions: Nothing }, resource: contractStateToHeader newContractState }
+
+      liftEffect do
+        case oldContractResponse of
+          Nothing -> Subscription.notify listener (Addition newContractResponse)
+          Just old | old /= newContractResponse -> Subscription.notify listener (Update { old, new: newContractResponse })
+          _ -> pure unit
+        Ref.modify_ (\s -> Map.insert contractId newContractResponse s) contractsRef
+
+      pure $ Just newContractResponse
+  action `catchError` \_ -> do
+    pure Nothing
 
 -- | The input set of endpoints which should be used for quering transactions.
 type TransactionsEndpointsSource = Map ContractId TransactionsEndpoint
@@ -153,8 +191,8 @@ newtype ContractTransactionsStream = ContractTransactionsStream
   { emitter :: Subscription.Emitter ContractTransactionsEvent
   , getLiveState :: Effect ContractTransactionsMap
   , getState :: Aff ContractTransactionsMap
-  , sync :: ContractId -> Aff Unit
   , start :: Aff Unit
+  , sync :: ContractId -> Aff Unit
   }
 
 -- | FIXME: take closer at error handling woudn't this component break in the case of network error?
@@ -288,8 +326,8 @@ contractsStates (PollingInterval pollingInterval) requestInterval getEndpoints s
     { emitter
     , getLiveState: Ref.read stateRef
     , getState: AVar.read stateAVar
-    , sync
     , start
+    , sync
     }
 
 fetchContractState
@@ -354,8 +392,8 @@ newtype ContractWithTransactionsStream = ContractWithTransactionsStream
   { emitter :: Subscription.Emitter ContractWithTransactionsEvent
   , getLiveState :: Effect ContractWithTransactionsMap
   , getState :: Aff ContractWithTransactionsMap
-  , sync :: ContractId -> Aff Unit
   , start :: Aff Unit
+  , sync :: ContractId -> Aff Unit
   }
 
 contractsWithTransactions :: ContractStream -> ContractStateStream -> ContractTransactionsStream -> ContractWithTransactionsStream
@@ -388,6 +426,7 @@ contractsWithTransactions (ContractStream contractStream) (ContractStateStream c
       <|> (ContractStateEvent <$> contractStateStream.emitter)
 
     sync contractId = do
+      contractStream.sync contractId
       contractStateStream.sync contractId
       contractTransactionsStream.sync contractId
 
@@ -397,7 +436,7 @@ contractsWithTransactions (ContractStream contractStream) (ContractStateStream c
       , void $ contractStream.start
       ]
 
-  ContractWithTransactionsStream { emitter, getLiveState, getState, sync, start }
+  ContractWithTransactionsStream { emitter, getLiveState, getState, start, sync }
 
 mkContractsWithTransactions
   :: forall params
