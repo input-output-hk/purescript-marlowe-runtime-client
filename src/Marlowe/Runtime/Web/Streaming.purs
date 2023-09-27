@@ -27,14 +27,18 @@ import Prelude
 
 import Contrib.Data.Map (New(..), Old(..), additions, deletions, fromFoldableBy, updates) as Map
 import Contrib.Effect as Effect
+import Contrib.Effect.Aff (parAffs)
+import Contrib.Effect.Aff as Aff
 import Control.Alt ((<|>))
 import Control.Monad.Error.Class (catchError)
 import Control.Monad.Rec.Class (forever)
 import Control.Parallel (parSequence)
 import Data.Filterable (filter)
 import Data.Foldable (foldMap)
+import Data.Foldable as Map
+import Data.FunctorWithIndex (mapWithIndex)
 import Data.Map (Map)
-import Data.Map (catMaybes, empty, filter, insert, lookup, union) as Map
+import Data.Map (catMaybes, empty, filter, fromFoldable, insert, lookup, toUnfoldable, union) as Map
 import Data.Maybe (Maybe(..), fromMaybe)
 import Data.Newtype as Newtype
 import Data.Traversable (for_)
@@ -230,6 +234,7 @@ contractsTransactions (PollingInterval pollingInterval) requestInterval getEndpo
     , sync
     }
 
+
 fetchContractTransactions
   :: ContractId
   -> TransactionsEndpoint
@@ -274,9 +279,14 @@ fetchContractsTransactions
   -> Ref.Ref ContractTransactionsMap
   -> Aff ContractTransactionsMap
 fetchContractsTransactions endpoints listener (RequestInterval requestInterval) serverUrl transactionsRef = do
-  map Map.catMaybes $ forWithIndex endpoints \contractId endpoint -> do
-    delay requestInterval
-    fetchContractTransactions contractId endpoint listener serverUrl transactionsRef
+  let
+    -- map Map.catMaybes $ forWithIndex endpoints \contractId endpoint -> do
+    fetches = Map.toUnfoldable endpoints <#> \(contractId /\ endpoint) -> do
+      delay requestInterval
+      ts <- fetchContractTransactions contractId endpoint listener serverUrl transactionsRef
+      pure $ contractId /\ ts
+  res <- parAffs (Aff.MaxChunkSize maxFetchSize) fetches
+  pure $ Map.catMaybes <<< Map.fromFoldable $ res
 
 -- | The input set of endpoints which should be used for quering transactions.
 type ContractEndpointsSource = Map ContractId ContractEndpoint
@@ -358,6 +368,9 @@ fetchContractState contractId endpoint listener serverUrl stateRef = do
   action `catchError` \_ -> do
     pure Nothing
 
+maxFetchSize :: Int
+maxFetchSize = 10
+
 fetchContractsStates
   :: ContractEndpointsSource
   -> Listener ContractStateEvent
@@ -366,9 +379,13 @@ fetchContractsStates
   -> Ref.Ref ContractStateMap
   -> Aff ContractStateMap
 fetchContractsStates endpoints listener (RequestInterval requestInterval) serverUrl stateRef = do
-  map Map.catMaybes $ forWithIndex endpoints \contractId endpoint -> do
-    delay requestInterval
-    fetchContractState contractId endpoint listener serverUrl stateRef
+  let
+    fetches = Map.toUnfoldable endpoints <#> \(contractId /\ endpoint) -> do
+      delay requestInterval
+      res <- fetchContractState contractId endpoint listener serverUrl stateRef
+      pure $ contractId /\ res
+  res <- parAffs (Aff.MaxChunkSize maxFetchSize) fetches
+  pure $ Map.catMaybes <<< Map.fromFoldable $ res
 
 type TxHeaderWithEndpoint = TxHeader /\ TransactionEndpoint
 
