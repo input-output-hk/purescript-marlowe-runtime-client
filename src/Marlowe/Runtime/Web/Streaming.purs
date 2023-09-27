@@ -239,6 +239,10 @@ fetchContractTransactions contractId transactionEndpoint prevTransactions listen
       { contractTransactions: newTransactions
       , notify: Subscription.notify listener (contractId /\ change)
       }
+    Just (Nothing /\ newTransactions) -> pure $ Just
+      { contractTransactions: newTransactions
+      , notify: pure unit
+      }
     _ -> pure Nothing
 
 fetchContractsTransactions
@@ -352,6 +356,10 @@ fetchContractState contractId endpoint oldContractState listener serverUrl = do
     Just (Just change /\ newState) -> pure $ Just
       { contractState: newState
       , notify: Subscription.notify listener (contractId /\ change)
+      }
+    Just (Nothing /\ newState) -> pure $ Just
+      { contractState: newState
+      , notify: pure unit
       }
     _ -> pure Nothing
 
