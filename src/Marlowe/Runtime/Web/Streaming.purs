@@ -34,12 +34,12 @@ import Control.Parallel (parSequence)
 import Data.Filterable (filter)
 import Data.Foldable (foldMap)
 import Data.Map (Map)
-import Data.Map (catMaybes, empty, filter, fromFoldable, values, lookup, singleton, union, update) as Map
+import Data.Map (catMaybes, empty, filter, insert, lookup, union) as Map
 import Data.Maybe (Maybe(..), fromMaybe)
 import Data.Newtype as Newtype
 import Data.Traversable (for_)
 import Data.TraversableWithIndex (forWithIndex)
-import Data.Tuple (fst, snd)
+import Data.Tuple (fst)
 import Data.Tuple.Nested (type (/\), (/\))
 import Effect (Effect)
 import Effect.Aff (Aff, Milliseconds, delay)
@@ -165,39 +165,29 @@ contractsTransactions
   -> ServerURL
   -> Aff ContractTransactionsStream
 contractsTransactions (PollingInterval pollingInterval) requestInterval getEndpoints serverUrl = do
-  stateRef <- liftEffect $ Ref.new Map.empty
-  stateAVar <- AVar.empty
+  transactionsRef <- liftEffect $ Ref.new Map.empty
+  transactionsAVar <- AVar.empty
 
   { emitter, listener } <- liftEffect Subscription.create
 
   let
     start = forever do
-      void $ AVar.tryTake stateAVar
-      previousState <- liftEffect $ Ref.read stateRef
+      void $ AVar.tryTake transactionsAVar
       endpoints <- getEndpoints
-      { contractsTransactions: newState, notify } <- fetchContractsTransactions endpoints previousState listener requestInterval serverUrl
+      newTransactions <- fetchContractsTransactions endpoints listener requestInterval serverUrl transactionsRef
 
-      liftEffect do
-        Ref.write newState stateRef
-        notify
-      AVar.put newState stateAVar
+      AVar.put newTransactions transactionsAVar
       delay pollingInterval
 
     sync contractId = do
       let
         endpoint = unsafeCoerce $ "/contracts/" <> txOutRefToString contractId <> "/transactions"
-      previousState <- liftEffect $ Ref.read stateRef
-      newTransactions <- fetchContractTransactions contractId endpoint (Map.lookup contractId previousState) listener serverUrl
-
-      case newTransactions of
-        Just { contractTransactions } -> liftEffect do
-          Ref.modify_ (\s -> Map.update (\_ -> Just contractTransactions) contractId s) stateRef
-        _ -> pure unit
+      void $ fetchContractTransactions contractId endpoint listener serverUrl transactionsRef
 
   pure $ ContractTransactionsStream
     { emitter
-    , getLiveState: Ref.read stateRef
-    , getState: AVar.read stateAVar
+    , getLiveState: Ref.read transactionsRef
+    , getState: AVar.read transactionsAVar
     , start
     , sync
     }
@@ -205,66 +195,50 @@ contractsTransactions (PollingInterval pollingInterval) requestInterval getEndpo
 fetchContractTransactions
   :: ContractId
   -> TransactionsEndpoint
-  -> Maybe (Array TxHeaderWithEndpoint)
   -> Listener ContractTransactionsEvent
   -> ServerURL
-  -> Aff
-       ( Maybe
-           { contractTransactions :: Array TxHeaderWithEndpoint
-           , notify :: Effect Unit
-           }
-       )
-fetchContractTransactions contractId transactionEndpoint prevTransactions listener serverUrl = do
-  item <- do
-    let
-      action = do
-        (txHeaders :: Array { resource :: TxHeader, links :: { transaction :: TransactionEndpoint } }) <- do
-          pages <- getPages' @String serverUrl transactionEndpoint {} Nothing >>= Effect.liftEither
-          pure $ foldMap _.page pages
+  -> Ref.Ref ContractTransactionsMap
+  -> Aff (Maybe (Array TxHeaderWithEndpoint))
+fetchContractTransactions contractId transactionEndpoint listener serverUrl transactionsRef = do
+  let
+    action = do
+      (txHeaders :: Array { resource :: TxHeader, links :: { transaction :: TransactionEndpoint } }) <- do
+        pages <- getPages' @String serverUrl transactionEndpoint {} Nothing >>= Effect.liftEither
+        pure $ foldMap _.page pages
 
-        let
-          newTransactions = txHeaders <#> \{ resource, links: { transaction: transactionEndpoint' } } ->
-            resource /\ transactionEndpoint'
-          change =
-            if Just (map fst newTransactions) == (map fst <$> prevTransactions) then
-              Nothing
-            else
-              Just { old: prevTransactions, new: newTransactions }
-        pure $ Just $ change /\ newTransactions
-    action `catchError` \_ -> do
-      pure Nothing
+      previousState <- liftEffect $ Ref.read transactionsRef
 
-  case item of
-    Just (Just change /\ newTransactions) -> pure $ Just
-      { contractTransactions: newTransactions
-      , notify: Subscription.notify listener (contractId /\ change)
-      }
-    Just (Nothing /\ newTransactions) -> pure $ Just
-      { contractTransactions: newTransactions
-      , notify: pure unit
-      }
-    _ -> pure Nothing
+      let
+        oldTransactions = Map.lookup contractId previousState
+        newTransactions = txHeaders <#> \{ resource, links: { transaction: transactionEndpoint' } } ->
+          resource /\ transactionEndpoint'
+        change =
+          if Just (map fst newTransactions) == (map fst <$> oldTransactions) then
+            Nothing
+          else
+            Just { old: oldTransactions, new: newTransactions }
+
+      liftEffect do
+        case change of
+          Just c -> Subscription.notify listener (contractId /\ c)
+          Nothing -> pure unit
+        Ref.modify_ (\s -> Map.insert contractId newTransactions s) transactionsRef
+
+      pure $ Just newTransactions
+  action `catchError` \_ -> do
+    pure Nothing
 
 fetchContractsTransactions
   :: TransactionsEndpointsSource
-  -> ContractTransactionsMap
   -> Listener ContractTransactionsEvent
   -> RequestInterval
   -> ServerURL
-  -> Aff
-       { contractsTransactions :: ContractTransactionsMap
-       , notify :: Effect Unit
-       }
-fetchContractsTransactions endpoints prevContractTransactionMap listener (RequestInterval requestInterval) serverUrl = do
-  items <- map Map.catMaybes $ forWithIndex endpoints \contractId endpoint -> do
-    let
-      oldTransactions = Map.lookup contractId prevContractTransactionMap
+  -> Ref.Ref ContractTransactionsMap
+  -> Aff ContractTransactionsMap
+fetchContractsTransactions endpoints listener (RequestInterval requestInterval) serverUrl transactionsRef = do
+  map Map.catMaybes $ forWithIndex endpoints \contractId endpoint -> do
     delay requestInterval
-    fetchContractTransactions contractId endpoint oldTransactions listener serverUrl
-  pure
-    { contractsTransactions: map _.contractTransactions items
-    , notify: for_ (Map.values items) _.notify
-    }
+    fetchContractTransactions contractId endpoint listener serverUrl transactionsRef
 
 -- | The input set of endpoints which should be used for quering transactions.
 type ContractEndpointsSource = Map ContractId ContractEndpoint
@@ -298,13 +272,9 @@ contractsStates (PollingInterval pollingInterval) requestInterval getEndpoints s
   let
     start = forever do
       void $ AVar.tryTake stateAVar
-      previousState <- liftEffect $ Ref.read stateRef
       endpoints <- getEndpoints
-      { contractsStates: newState, notify } <- fetchContractsStates endpoints previousState listener requestInterval serverUrl
+      newState <- fetchContractsStates endpoints listener requestInterval serverUrl stateRef
 
-      liftEffect do
-        Ref.write newState stateRef
-        notify
       AVar.put newState stateAVar
 
       delay pollingInterval
@@ -312,12 +282,7 @@ contractsStates (PollingInterval pollingInterval) requestInterval getEndpoints s
     sync contractId = do
       let
         endpoint = unsafeCoerce $ "/contracts/" <> txOutRefToString contractId
-      previousState <- liftEffect $ Ref.read stateRef
-      newState <- fetchContractState contractId endpoint (Map.lookup contractId previousState) listener serverUrl
-      case newState of
-        Just { contractState } -> liftEffect do
-          Ref.modify_ (\s -> Map.update (\_ -> Just contractState) contractId s) stateRef
-        _ -> pure unit
+      void $ fetchContractState contractId endpoint listener serverUrl stateRef
 
   pure $ ContractStateStream
     { emitter
@@ -330,59 +295,42 @@ contractsStates (PollingInterval pollingInterval) requestInterval getEndpoints s
 fetchContractState
   :: ContractId
   -> ContractEndpoint
-  -> Maybe ContractState
   -> Listener ContractStateEvent
   -> ServerURL
-  -> Aff
-       ( Maybe
-           { contractState :: ContractState
-           , notify :: Effect Unit
-           }
-       )
-fetchContractState contractId endpoint oldContractState listener serverUrl = do
-  item <- do
-    let
-      action = do
-        newContractState <- getResource' @String serverUrl endpoint {} {} >>= Effect.liftEither <#> _.payload.resource
-        let
-          change =
-            if oldContractState /= Just newContractState then Nothing
-            else pure { old: oldContractState, new: newContractState }
-        pure $ Just $ change /\ newContractState
-    action `catchError` \_ -> do
-      pure Nothing
+  -> Ref.Ref ContractStateMap
+  -> Aff (Maybe ContractState)
+fetchContractState contractId endpoint listener serverUrl stateRef = do
+  let
+    action = do
+      previousState <- liftEffect $ Ref.read stateRef
+      newContractState <- getResource' @String serverUrl endpoint {} {} >>= Effect.liftEither <#> _.payload.resource
+      let
+        oldContractState = Map.lookup contractId previousState
+        change =
+          if oldContractState /= Just newContractState then Nothing
+          else pure { old: oldContractState, new: newContractState }
 
-  case item of
-    Just (Just change /\ newState) -> pure $ Just
-      { contractState: newState
-      , notify: Subscription.notify listener (contractId /\ change)
-      }
-    Just (Nothing /\ newState) -> pure $ Just
-      { contractState: newState
-      , notify: pure unit
-      }
-    _ -> pure Nothing
+      liftEffect do
+        case change of
+          Just c -> Subscription.notify listener (contractId /\ c)
+          Nothing -> pure unit
+        Ref.modify_ (\s -> Map.insert contractId newContractState s) stateRef
+
+      pure $ Just newContractState
+  action `catchError` \_ -> do
+    pure Nothing
 
 fetchContractsStates
   :: ContractEndpointsSource
-  -> ContractStateMap
   -> Listener ContractStateEvent
   -> RequestInterval
   -> ServerURL
-  -> Aff
-       { contractsStates :: ContractStateMap
-       , notify :: Effect Unit
-       }
-fetchContractsStates endpoints prevContractStateMap listener (RequestInterval requestInterval) serverUrl = do
-  items <- map Map.catMaybes $ forWithIndex endpoints \contractId endpoint -> do
-    let
-      oldContractState = Map.lookup contractId prevContractStateMap
+  -> Ref.Ref ContractStateMap
+  -> Aff ContractStateMap
+fetchContractsStates endpoints listener (RequestInterval requestInterval) serverUrl stateRef = do
+  map Map.catMaybes $ forWithIndex endpoints \contractId endpoint -> do
     delay requestInterval
-    fetchContractState contractId endpoint oldContractState listener serverUrl
-  pure
-    { contractsStates: map _.contractState items
-    , notify: for_ (Map.values items) _.notify
-    }
+    fetchContractState contractId endpoint listener serverUrl stateRef
 
 type TxHeaderWithEndpoint = TxHeader /\ TransactionEndpoint
 
