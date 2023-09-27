@@ -49,7 +49,7 @@ import Effect.Ref as Ref
 import Halogen.Subscription (Listener)
 import Halogen.Subscription as Subscription
 import Marlowe.Runtime.Web.Client (foldMapMContractPages, getPages', getResource')
-import Marlowe.Runtime.Web.Types (class QueryParams, ContractEndpoint, ContractHeader(..), ContractId, ContractState(..), ContractsEndpoint, GetContractResponse, GetContractsResponse, ServerURL, TransactionEndpoint, TransactionsEndpoint, TxHeader, api, txOutRefToString)
+import Marlowe.Runtime.Web.Types (class QueryParams, ContractEndpoint, ContractHeader(..), ContractId, ContractState(..), ContractsEndpoint, GetContractResponse, GetContractsResponse, ServerURL, TransactionEndpoint, TransactionsEndpoint, TxHeader, api, txOutRefToUrlEncodedString)
 import Unsafe.Coerce (unsafeCoerce)
 
 -- | API CAUTION: We update the state in chunks but send the events one by one. This means that
@@ -136,7 +136,7 @@ contracts (PollingInterval pollingInterval) (RequestInterval requestInterval) pa
 
     sync contractId = do
       let
-        endpoint = unsafeCoerce $ "/contracts/" <> txOutRefToString contractId
+        endpoint = unsafeCoerce $ "/contracts/" <> txOutRefToUrlEncodedString contractId
       void $ fetchContractHeader contractId endpoint listener serverUrl contractsRef
 
   pure $ ContractStream
@@ -219,7 +219,7 @@ contractsTransactions (PollingInterval pollingInterval) requestInterval getEndpo
 
     sync contractId = do
       let
-        endpoint = unsafeCoerce $ "/contracts/" <> txOutRefToString contractId <> "/transactions"
+        endpoint = unsafeCoerce $ "/contracts/" <> txOutRefToUrlEncodedString contractId <> "/transactions"
       void $ fetchContractTransactions contractId endpoint listener serverUrl transactionsRef
 
   pure $ ContractTransactionsStream
@@ -319,7 +319,7 @@ contractsStates (PollingInterval pollingInterval) requestInterval getEndpoints s
 
     sync contractId = do
       let
-        endpoint = unsafeCoerce $ "/contracts/" <> txOutRefToString contractId
+        endpoint = unsafeCoerce $ "/contracts/" <> txOutRefToUrlEncodedString contractId
       void $ fetchContractState contractId endpoint listener serverUrl stateRef
 
   pure $ ContractStateStream
