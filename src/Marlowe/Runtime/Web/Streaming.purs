@@ -136,7 +136,7 @@ contracts (PollingInterval pollingInterval) (RequestInterval requestInterval) pa
 
     sync contractId = do
       let
-        endpoint = unsafeCoerce $ "/contracts/" <> txOutRefToUrlEncodedString contractId
+        endpoint = unsafeCoerce $ "contracts/" <> txOutRefToUrlEncodedString contractId
       void $ fetchContractHeader contractId endpoint listener serverUrl contractsRef
 
   pure $ ContractStream
@@ -219,7 +219,7 @@ contractsTransactions (PollingInterval pollingInterval) requestInterval getEndpo
 
     sync contractId = do
       let
-        endpoint = unsafeCoerce $ "/contracts/" <> txOutRefToUrlEncodedString contractId <> "/transactions"
+        endpoint = unsafeCoerce $ "contracts/" <> txOutRefToUrlEncodedString contractId <> "/transactions"
       void $ fetchContractTransactions contractId endpoint listener serverUrl transactionsRef
 
   pure $ ContractTransactionsStream
@@ -319,7 +319,7 @@ contractsStates (PollingInterval pollingInterval) requestInterval getEndpoints s
 
     sync contractId = do
       let
-        endpoint = unsafeCoerce $ "/contracts/" <> txOutRefToUrlEncodedString contractId
+        endpoint = unsafeCoerce $ "contracts/" <> txOutRefToUrlEncodedString contractId
       void $ fetchContractState contractId endpoint listener serverUrl stateRef
 
   pure $ ContractStateStream
