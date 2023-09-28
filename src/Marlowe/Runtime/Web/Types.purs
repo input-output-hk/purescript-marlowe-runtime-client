@@ -966,8 +966,7 @@ type GetWithdrawalsResponseContent = WithdrawalHeader
 type WithdrawalEndpointRow r = ("withdrawal" :: WithdrawalEndpoint | r)
 
 newtype PostWithdrawalsRequest = PostWithdrawalsRequest
-  { role :: String
-  , contractId :: TxOutRef
+  { payouts :: Array TxOutRef
   , minUTxODeposit :: V1.Ada
   , changeAddress :: Bech32
   , addresses :: Array Bech32
@@ -976,8 +975,7 @@ newtype PostWithdrawalsRequest = PostWithdrawalsRequest
 
 instance EncodeJsonBody PostWithdrawalsRequest where
   encodeJsonBody (PostWithdrawalsRequest r) = encodeJson
-    { role: r.role
-    , contractId: txOutRefToString r.contractId
+    { payouts: map txOutRefToString r.payouts
     , minUTxODeposit: r.minUTxODeposit
     --- , collateralUTxOs: r.collateralUTxOs
     }
