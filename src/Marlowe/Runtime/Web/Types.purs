@@ -652,7 +652,9 @@ class QueryParams :: Type -> Type -> Constraint
 class QueryParams endpoint params | endpoint -> params where
   toQueryParams :: Proxy endpoint -> params -> Array (String /\ (Maybe String))
 
-instance QueryParams ContractsEndpoint { tags :: Array String, partyAddresses :: Array Bech32, partyRoles :: Array C.AssetId } where
+type ContractsQueryParams = { tags :: Array String, partyAddresses :: Array Bech32, partyRoles :: Array C.AssetId }
+
+instance QueryParams ContractsEndpoint ContractsQueryParams where
   toQueryParams _ { tags, partyAddresses, partyRoles } =
     let
       tags' = map (\tag -> "tag" /\ Just tag) tags

@@ -35,8 +35,6 @@ import Control.Monad.Rec.Class (forever)
 import Control.Parallel (parSequence)
 import Data.Filterable (filter)
 import Data.Foldable (foldMap)
-import Data.Foldable as Map
-import Data.FunctorWithIndex (mapWithIndex)
 import Data.Map (Map)
 import Data.Map (catMaybes, empty, filter, fromFoldable, insert, lookup, toUnfoldable, union) as Map
 import Data.Maybe (Maybe(..), fromMaybe)
@@ -53,13 +51,12 @@ import Effect.Ref as Ref
 import Halogen.Subscription (Listener)
 import Halogen.Subscription as Subscription
 import Marlowe.Runtime.Web.Client (foldMapMContractPages, getPages', getResource')
-import Marlowe.Runtime.Web.Types (class QueryParams, ContractEndpoint, ContractHeader(..), ContractId, ContractState(..), ContractsEndpoint, GetContractResponse, GetContractsResponse, ServerURL, TransactionEndpoint, TransactionsEndpoint, TxHeader, api, txOutRefToUrlEncodedString)
+import Marlowe.Runtime.Web.Types (ContractEndpoint, ContractHeader(..), ContractId, ContractState(..), ContractsQueryParams, GetContractResponse, GetContractsResponse, ServerURL, TransactionEndpoint, TransactionsEndpoint, TxHeader, api, txOutRefToUrlEncodedString)
 import Unsafe.Coerce (unsafeCoerce)
 
 -- | API CAUTION: We update the state in chunks but send the events one by one. This means that
 -- | the event handler can see some state changes (in `getLiveState`) before it receives some notifications.
--- | `getState` provides a consistent but possibly blocking view of the state.
-
+-- | `getState` based on `AVar` provides a "consistent" but possibly blocking view of the state.
 data ContractEvent
   = Addition GetContractsResponse
   | Deletion GetContractsResponse
@@ -81,6 +78,7 @@ newtype ContractStream = ContractStream
   , getState :: Aff ContractMap
   , start :: Aff Unit
   , sync :: ContractId -> Aff Unit
+  , updateQueryParams :: ContractsQueryParams -> Effect Unit
   }
 
 newtype MaxPages = MaxPages Int
@@ -89,32 +87,29 @@ newtype MaxPages = MaxPages Int
 -- | TODO: we should return `Aff` or fiber and allow more flexible "threading" management.
 -- Use constraint at the end: `Warn (Text "pushPullContractsStreams is deprecated, use web socket based implementation instead!")`
 contracts
-  :: forall params
-   . QueryParams ContractsEndpoint params
-  => PollingInterval
+  :: PollingInterval
   -> RequestInterval
-  -> params
+  -> ContractsQueryParams
   -> (GetContractsResponse -> Boolean)
   -> Maybe MaxPages
   -> ServerURL
   -> Aff ContractStream
-contracts (PollingInterval pollingInterval) (RequestInterval requestInterval) params filterContracts possibleMaxPages serverUrl = do
+contracts (PollingInterval pollingInterval) (RequestInterval requestInterval) origParams filterContracts possibleMaxPages serverUrl = do
   contractsRef <- liftEffect $ Ref.new Map.empty
   pageNumberRef <- liftEffect $ Ref.new 0
+  paramsRef <- liftEffect $ Ref.new origParams
   contractsAVar <- AVar.empty
 
   { emitter, listener } <- liftEffect Subscription.create
-
-  let
-    range = Nothing
 
   let
     start = forever do
       liftEffect $ Ref.write 0 pageNumberRef
       void $ AVar.tryTake contractsAVar
       previousContracts <- liftEffect $ Ref.read contractsRef
+      params <- liftEffect $ Ref.read paramsRef
       nextContracts :: Map ContractId GetContractsResponse <-
-        map contractsById $ Effect.liftEither =<< foldMapMContractPages @String serverUrl api params range \pageContracts -> do
+        map contractsById $ Effect.liftEither =<< foldMapMContractPages @String serverUrl api params Nothing \pageContracts -> do
           let
             pageContracts' = filter filterContracts pageContracts
           liftEffect do
@@ -140,6 +135,7 @@ contracts (PollingInterval pollingInterval) (RequestInterval requestInterval) pa
 
     sync contractId = do
       let
+        endpoint :: ContractEndpoint
         endpoint = unsafeCoerce $ "contracts/" <> txOutRefToUrlEncodedString contractId
       void $ fetchContractHeader contractId endpoint listener serverUrl contractsRef
 
@@ -149,6 +145,7 @@ contracts (PollingInterval pollingInterval) (RequestInterval requestInterval) pa
     , getState: AVar.read contractsAVar
     , start
     , sync
+    , updateQueryParams: flip Ref.write paramsRef
     }
 
 contractStateToHeader :: ContractState -> ContractHeader
@@ -179,6 +176,7 @@ fetchContractHeader contractId endpoint listener serverUrl contractsRef = do
         Ref.modify_ (\s -> Map.insert contractId newContractResponse s) contractsRef
 
       pure $ Just newContractResponse
+  -- FIXME: Error reporting
   action `catchError` \_ -> do
     pure Nothing
 
@@ -233,7 +231,6 @@ contractsTransactions (PollingInterval pollingInterval) requestInterval getEndpo
     , start
     , sync
     }
-
 
 fetchContractTransactions
   :: ContractId
@@ -411,6 +408,7 @@ newtype ContractWithTransactionsStream = ContractWithTransactionsStream
   , getState :: Aff ContractWithTransactionsMap
   , start :: Aff Unit
   , sync :: ContractId -> Aff Unit
+  , updateQueryParams :: ContractsQueryParams -> Effect Unit
   }
 
 contractsWithTransactions :: ContractStream -> ContractStateStream -> ContractTransactionsStream -> ContractWithTransactionsStream
@@ -453,14 +451,15 @@ contractsWithTransactions (ContractStream contractStream) (ContractStateStream c
       , void $ contractStream.start
       ]
 
-  ContractWithTransactionsStream { emitter, getLiveState, getState, start, sync }
+    updateQueryParams = contractStream.updateQueryParams
+
+  ContractWithTransactionsStream
+    { emitter, getLiveState, getState, start, sync, updateQueryParams }
 
 mkContractsWithTransactions
-  :: forall params
-   . QueryParams ContractsEndpoint params
-  => PollingInterval
+  :: PollingInterval
   -> RequestInterval
-  -> params
+  -> ContractsQueryParams
   -> (GetContractsResponse -> Boolean)
   -> Maybe MaxPages
   -> ServerURL
