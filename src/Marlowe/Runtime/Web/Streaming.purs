@@ -443,7 +443,8 @@ contractsWithTransactions (ContractStream contractStream) (ContractStateStream c
     sync contractId = do
       contractStream.sync contractId
       contractStateStream.sync contractId
-      contractTransactionsStream.sync contractId
+      -- When we create the contract the transcations endpoint is not available yet
+      contractTransactionsStream.sync contractId `catchError` \_ -> pure unit
 
     start = map (const unit) $ parSequence
       [ void $ contractStateStream.start
