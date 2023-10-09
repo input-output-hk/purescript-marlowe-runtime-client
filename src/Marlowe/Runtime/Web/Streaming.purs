@@ -163,10 +163,20 @@ fetchContractHeader contractId endpoint listener serverUrl contractsRef = do
   let
     action = do
       previousContract <- liftEffect $ Ref.read contractsRef
-      newContractState <- getResource' @String serverUrl endpoint {} {} >>= Effect.liftEither <#> _.payload.resource
+      newContractState@(ContractState { block: possibleBlock }) <- getResource' @String serverUrl endpoint {} {} >>= Effect.liftEither <#> _.payload.resource
       let
         oldContractResponse = Map.lookup contractId previousContract
-        newContractResponse = { links: { contract: endpoint, transactions: Nothing }, resource: contractStateToHeader newContractState }
+        transactions :: Maybe TransactionsEndpoint
+        transactions = do
+          -- If block info is provided then we know that the contract is on chain
+          -- and that the /transactions endpoint is available.
+          _ <- possibleBlock
+          pure $ unsafeCoerce $ unsafeCoerce endpoint <> "/transmissions"
+
+        newContractResponse =
+          { links: { contract: endpoint, transactions }
+          , resource: contractStateToHeader newContractState
+          }
 
       liftEffect do
         case oldContractResponse of
