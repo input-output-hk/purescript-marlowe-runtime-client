@@ -65,6 +65,10 @@ data ContractEvent
 contractsById :: Array GetContractsResponse -> Map ContractId GetContractsResponse
 contractsById = Map.fromFoldableBy $ _.contractId <<< Newtype.unwrap <<< _.resource
 
+
+mkTransactionsEndpoint :: ContractId -> TransactionsEndpoint
+mkTransactionsEndpoint contractId = unsafeCoerce $ "contracts/" <> txOutRefToUrlEncodedString contractId <> "/transactions"
+
 newtype RequestInterval = RequestInterval Milliseconds
 
 newtype PollingInterval = PollingInterval Milliseconds
@@ -171,7 +175,7 @@ fetchContractHeader contractId endpoint listener serverUrl contractsRef = do
           -- If block info is provided then we know that the contract is on chain
           -- and that the /transactions endpoint is available.
           _ <- possibleBlock
-          pure $ unsafeCoerce $ unsafeCoerce endpoint <> "/transmissions"
+          pure $ mkTransactionsEndpoint contractId
 
         newContractResponse =
           { links: { contract: endpoint, transactions }
@@ -231,7 +235,7 @@ contractsTransactions (PollingInterval pollingInterval) requestInterval getEndpo
 
     sync contractId = do
       let
-        endpoint = unsafeCoerce $ "contracts/" <> txOutRefToUrlEncodedString contractId <> "/transactions"
+        endpoint = mkTransactionsEndpoint contractId
       void $ fetchContractTransactions contractId endpoint listener serverUrl transactionsRef
 
   pure $ ContractTransactionsStream
