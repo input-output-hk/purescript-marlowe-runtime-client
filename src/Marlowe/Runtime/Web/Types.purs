@@ -881,8 +881,8 @@ derive newtype instance DecodeJson ContractEndpoint
 
 newtype PostTransactionsRequest = PostTransactionsRequest
   { inputs :: Array V1.Input
-  , invalidBefore :: DateTime
-  , invalidHereafter :: DateTime
+  , invalidBefore :: Maybe DateTime
+  , invalidHereafter :: Maybe DateTime
   , metadata :: Metadata
   , tags :: Tags
   , changeAddress :: Bech32
@@ -893,8 +893,8 @@ newtype PostTransactionsRequest = PostTransactionsRequest
 instance EncodeJsonBody PostTransactionsRequest where
   encodeJsonBody (PostTransactionsRequest r) = encodeJson
     { inputs: r.inputs
-    , invalidBefore: ISO r.invalidBefore
-    , invalidHereafter: ISO r.invalidHereafter
+    , invalidBefore: ISO <$> r.invalidBefore
+    , invalidHereafter: ISO <$> r.invalidHereafter
     , metadata: r.metadata
     , tags: r.tags
     , version: V1
