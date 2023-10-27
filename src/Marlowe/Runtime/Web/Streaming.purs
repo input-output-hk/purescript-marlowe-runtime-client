@@ -34,12 +34,12 @@ import Control.Monad.Error.Class (catchError)
 import Control.Monad.Rec.Class (forever)
 import Control.Parallel (parSequence)
 import Data.Filterable (filter)
-import Data.Foldable (foldMap)
+import Data.Foldable (foldMap, foldl)
 import Data.Map (Map)
 import Data.Map (catMaybes, empty, filter, fromFoldable, insert, lookup, toUnfoldable, union) as Map
 import Data.Maybe (Maybe(..), fromMaybe)
 import Data.Newtype as Newtype
-import Data.Traversable (for_)
+import Data.Traversable (for, for_)
 import Data.TraversableWithIndex (forWithIndex)
 import Data.Tuple (fst)
 import Data.Tuple.Nested (type (/\), (/\))
@@ -82,7 +82,7 @@ newtype ContractStream = ContractStream
   , getState :: Aff ContractMap
   , start :: Aff Unit
   , sync :: ContractId -> Aff Unit
-  , updateQueryParams :: ContractsQueryParams -> Effect Unit
+  , updateQueryParams :: Array ContractsQueryParams -> Effect Unit
   }
 
 newtype MaxPages = MaxPages Int
@@ -93,7 +93,7 @@ newtype MaxPages = MaxPages Int
 contracts
   :: PollingInterval
   -> RequestInterval
-  -> ContractsQueryParams
+  -> Array ContractsQueryParams
   -> (GetContractsResponse -> Boolean)
   -> Maybe MaxPages
   -> ServerURL
@@ -105,32 +105,38 @@ contracts (PollingInterval pollingInterval) (RequestInterval requestInterval) or
   contractsAVar <- AVar.empty
 
   { emitter, listener } <- liftEffect Subscription.create
-
   let
     start = forever do
       liftEffect $ Ref.write 0 pageNumberRef
       void $ AVar.tryTake contractsAVar
       previousContracts <- liftEffect $ Ref.read contractsRef
-      params <- liftEffect $ Ref.read paramsRef
-      nextContracts :: Map ContractId GetContractsResponse <-
-        map contractsById $ Effect.liftEither =<< foldMapMContractPages @String serverUrl api params Nothing \pageContracts -> do
-          let
-            pageContracts' = filter filterContracts pageContracts
-          liftEffect do
+      paramsList <- liftEffect $ Ref.read paramsRef
+      let
+        fetchWithParams prms =
+          map contractsById $ Effect.liftEither =<< foldMapMContractPages @String serverUrl api prms Nothing \pageContracts -> do
             let
-              cs :: Map ContractId GetContractsResponse
-              cs = contractsById pageContracts'
-            Ref.modify_ (Map.union cs) contractsRef
-            for_ (Map.additions (Map.Old previousContracts) (Map.New cs)) $ Subscription.notify listener <<< Addition
-            for_ (Map.updates (Map.Old previousContracts) (Map.New cs)) $ Subscription.notify listener <<< Update
-          pageNumber <- liftEffect $ Ref.modify (add 1) pageNumberRef
-          delay requestInterval
-          pure
-            { result: pageContracts'
-            , stopFetching: case possibleMaxPages of
-                Nothing -> false
-                Just (MaxPages maxPages) -> pageNumber >= maxPages
-            }
+              pageContracts' = filter filterContracts pageContracts
+            liftEffect do
+              let
+                cs :: Map ContractId GetContractsResponse
+                cs = contractsById pageContracts'
+              Ref.modify_ (Map.union cs) contractsRef
+              for_ (Map.additions (Map.Old previousContracts) (Map.New cs)) $ Subscription.notify listener <<< Addition
+              for_ (Map.updates (Map.Old previousContracts) (Map.New cs)) $ Subscription.notify listener <<< Update
+            pageNumber <- liftEffect $ Ref.modify (add 1) pageNumberRef
+            delay requestInterval
+            pure
+              { result: pageContracts'
+              , stopFetching: case possibleMaxPages of
+                  Nothing -> false
+                  Just (MaxPages maxPages) -> pageNumber >= maxPages
+              }
+
+      results <- for paramsList fetchWithParams
+      let
+        nextContracts :: Map ContractId GetContractsResponse
+        nextContracts = foldl Map.union Map.empty results
+
       liftEffect do
         Ref.write nextContracts contractsRef
         for_ (Map.deletions (Map.Old previousContracts) (Map.New nextContracts)) $ Subscription.notify listener <<< Deletion
@@ -422,7 +428,7 @@ newtype ContractWithTransactionsStream = ContractWithTransactionsStream
   , getState :: Aff ContractWithTransactionsMap
   , start :: Aff Unit
   , sync :: ContractId -> Aff Unit
-  , updateQueryParams :: ContractsQueryParams -> Effect Unit
+  , updateQueryParams :: Array ContractsQueryParams -> Effect Unit
   }
 
 contractsWithTransactions :: ContractStream -> ContractStateStream -> ContractTransactionsStream -> ContractWithTransactionsStream
@@ -474,7 +480,7 @@ contractsWithTransactions (ContractStream contractStream) (ContractStateStream c
 mkContractsWithTransactions
   :: PollingInterval
   -> RequestInterval
-  -> ContractsQueryParams
+  -> Array ContractsQueryParams
   -> (GetContractsResponse -> Boolean)
   -> Maybe MaxPages
   -> ServerURL
