@@ -240,9 +240,10 @@ contractsTransactions (PollingInterval pollingInterval) requestInterval getEndpo
       delay pollingInterval
 
     sync contractId = do
-      let
-        endpoint = mkTransactionsEndpoint contractId
-      void $ fetchContractTransactions contractId endpoint listener serverUrl transactionsRef
+      getEndpoints >>= Map.lookup contractId >>> case _ of
+        Nothing -> pure unit
+        Just endpoint -> do
+          void $ fetchContractTransactions contractId endpoint listener serverUrl transactionsRef
 
   pure $ ContractTransactionsStream
     { emitter
@@ -345,9 +346,10 @@ contractsStates (PollingInterval pollingInterval) requestInterval getEndpoints s
       delay pollingInterval
 
     sync contractId = do
-      let
-        endpoint = unsafeCoerce $ "contracts/" <> txOutRefToUrlEncodedString contractId
-      void $ fetchContractState contractId endpoint listener serverUrl stateRef
+      getEndpoints >>= Map.lookup contractId >>> case _ of
+        Nothing -> pure unit
+        Just endpoint -> do
+          void $ fetchContractState contractId endpoint listener serverUrl stateRef
 
   pure $ ContractStateStream
     { emitter
@@ -465,8 +467,7 @@ contractsWithTransactions (ContractStream contractStream) (ContractStateStream c
     sync contractId = do
       contractStream.sync contractId
       contractStateStream.sync contractId
-      -- When we create the contract the transcations endpoint is not available yet
-      contractTransactionsStream.sync contractId `catchError` \_ -> pure unit
+      contractTransactionsStream.sync contractId
 
     start = map (const unit) $ parSequence
       [ void $ contractStateStream.start
