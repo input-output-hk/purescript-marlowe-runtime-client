@@ -37,7 +37,7 @@ import Data.Filterable (filter)
 import Data.Foldable (foldMap, foldl)
 import Data.Map (Map)
 import Data.Map (catMaybes, empty, filter, fromFoldable, insert, lookup, toUnfoldable, union) as Map
-import Data.Maybe (Maybe(..), fromMaybe)
+import Data.Maybe (Maybe(..))
 import Data.Newtype as Newtype
 import Data.Traversable (for, for_)
 import Data.TraversableWithIndex (forWithIndex)
@@ -412,7 +412,9 @@ type ContractWithTransactions =
   -- | but we don't want to wait with the updates
   -- | until all the states are fetched.
   , contractState :: Maybe GetContractResponse
-  , transactions :: Array TxHeaderWithEndpoint
+  -- | Same here. We want to indicate not fetched
+  -- | transactions with `Nothing`.
+  , transactions :: Maybe (Array TxHeaderWithEndpoint)
   }
 
 type ContractWithTransactionsMap = Map ContractId ContractWithTransactions
@@ -441,7 +443,7 @@ contractsWithTransactions (ContractStream contractStream) (ContractStateStream c
 
       forWithIndex contractMap \contractId contract -> do
         let
-          transactions = fromMaybe [] $ Map.lookup contractId contractTransactionsMap
+          transactions = Map.lookup contractId contractTransactionsMap
           contractState = Map.lookup contractId contractStateMap
         pure { contract, contractState, transactions }
 
@@ -452,7 +454,7 @@ contractsWithTransactions (ContractStream contractStream) (ContractStateStream c
 
       forWithIndex contractMap \contractId contract -> do
         let
-          transactions = fromMaybe [] $ Map.lookup contractId contractTransactionsMap
+          transactions = Map.lookup contractId contractTransactionsMap
           contractState = Map.lookup contractId contractStateMap
         pure { contract, contractState, transactions }
 
