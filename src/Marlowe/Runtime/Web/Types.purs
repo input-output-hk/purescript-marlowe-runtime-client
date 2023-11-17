@@ -85,6 +85,9 @@ instance EncodeJson TxId where
 instance DecodeJson TxId where
   decodeJson = map TxId <$> decodeJson
 
+instance Show TxId where
+  show = genericShow
+
 newtype TxOutRef = TxOutRef
   { txId :: TxId
   , txIx :: Int
@@ -106,6 +109,8 @@ instance DecodeJson TxOutRef where
 
 instance EncodeJson TxOutRef where
   encodeJson (TxOutRef { txId: TxId txId, txIx }) = encodeJson $ txId <> "#" <> show txIx
+instance Show TxOutRef where
+  show = genericShow
 
 txOutRefFromString :: String -> Maybe TxOutRef
 txOutRefFromString = String.split (String.Pattern "#") >>> case _ of
@@ -506,6 +511,8 @@ derive instance Newtype Payout _
 derive instance Eq Payout
 derive instance Ord Payout
 derive newtype instance DecodeJson Payout
+instance Show Payout where
+  show = genericShow
 
 type ContractStateRow = ContractHeadersRowBase
   ( initialContract :: V1.Contract
