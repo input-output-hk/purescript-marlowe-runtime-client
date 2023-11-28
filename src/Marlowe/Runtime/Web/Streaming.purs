@@ -43,6 +43,7 @@ import Data.Traversable (for, for_)
 import Data.TraversableWithIndex (forWithIndex)
 import Data.Tuple (fst)
 import Data.Tuple.Nested (type (/\), (/\))
+import Debug (traceM)
 import Effect (Effect)
 import Effect.Aff (Aff, Milliseconds, delay)
 import Effect.Aff.AVar as AVar
@@ -221,10 +222,13 @@ newtype ContractTransactionsStream = ContractTransactionsStream
 contractsTransactions
   :: PollingInterval
   -> RequestInterval
-  -> Aff TransactionsEndpointsSource
+  ->
+    { synced :: Aff TransactionsEndpointsSource
+    , live :: Effect TransactionsEndpointsSource
+    }
   -> ServerURL
   -> Aff ContractTransactionsStream
-contractsTransactions (PollingInterval pollingInterval) requestInterval getEndpoints serverUrl = do
+contractsTransactions (PollingInterval pollingInterval) requestInterval endpointsSources serverUrl = do
   transactionsRef <- liftEffect $ Ref.new Map.empty
   transactionsAVar <- AVar.empty
 
@@ -233,16 +237,21 @@ contractsTransactions (PollingInterval pollingInterval) requestInterval getEndpo
   let
     start = forever do
       void $ AVar.tryTake transactionsAVar
-      endpoints <- getEndpoints
+      endpoints <- endpointsSources.synced
       newTransactions <- fetchContractsTransactions endpoints listener requestInterval serverUrl transactionsRef
 
       AVar.put newTransactions transactionsAVar
       delay pollingInterval
 
     sync contractId = do
-      getEndpoints >>= Map.lookup contractId >>> case _ of
-        Nothing -> pure unit
+      traceM "SYNCING TRANSACTION OF"
+      traceM contractId
+      liftEffect endpointsSources.live >>= Map.lookup contractId >>> case _ of
+        Nothing -> do
+          traceM "CONTRACT NOT FOUND"
+          pure unit
         Just endpoint -> do
+          traceM "CONTRACT FOUND"
           void $ fetchContractTransactions contractId endpoint listener serverUrl transactionsRef
 
   pure $ ContractTransactionsStream
@@ -326,10 +335,13 @@ newtype ContractStateStream = ContractStateStream
 contractsStates
   :: PollingInterval
   -> RequestInterval
-  -> Aff ContractEndpointsSource
+  ->
+    { synced :: Aff ContractEndpointsSource
+    , live :: Effect ContractEndpointsSource
+    }
   -> ServerURL
   -> Aff ContractStateStream
-contractsStates (PollingInterval pollingInterval) requestInterval getEndpoints serverUrl = do
+contractsStates (PollingInterval pollingInterval) requestInterval endpointsSources serverUrl = do
   stateRef <- liftEffect $ Ref.new Map.empty
   stateAVar <- AVar.empty
 
@@ -338,7 +350,7 @@ contractsStates (PollingInterval pollingInterval) requestInterval getEndpoints s
   let
     start = forever do
       void $ AVar.tryTake stateAVar
-      endpoints <- getEndpoints
+      endpoints <- endpointsSources.synced
       newState <- fetchContractsStates endpoints listener requestInterval serverUrl stateRef
 
       AVar.put newState stateAVar
@@ -346,7 +358,7 @@ contractsStates (PollingInterval pollingInterval) requestInterval getEndpoints s
       delay pollingInterval
 
     sync contractId = do
-      getEndpoints >>= Map.lookup contractId >>> case _ of
+      liftEffect endpointsSources.live >>= Map.lookup contractId >>> case _ of
         Nothing -> pure unit
         Just endpoint -> do
           void $ fetchContractState contractId endpoint listener serverUrl stateRef
@@ -489,10 +501,16 @@ mkContractsWithTransactions
   -> ServerURL
   -> Aff ContractWithTransactionsStream
 mkContractsWithTransactions pollingInterval requestInterval params filterContracts possibleMaxPages serverUrl = do
-  contractStream@(ContractStream { getState }) <- contracts pollingInterval requestInterval params filterContracts possibleMaxPages serverUrl
+  contractStream@(ContractStream { getLiveState, getState }) <- contracts pollingInterval requestInterval params filterContracts possibleMaxPages serverUrl
   let
-    transactionEndpointsSource = Map.catMaybes <<< map (_.links.transactions) <<< Map.filter filterContracts <$> getState
-    contractEndpointsSource = map (_.links.contract) <<< Map.filter filterContracts <$> getState
+    transactionEndpointsSource =
+      { live: Map.catMaybes <<< map (_.links.transactions) <<< Map.filter filterContracts <$> getLiveState
+      , synced: Map.catMaybes <<< map (_.links.transactions) <<< Map.filter filterContracts <$> getState
+      }
+    contractEndpointsSource =
+      { live: map (_.links.contract) <<< Map.filter filterContracts <$> getLiveState
+      , synced: map (_.links.contract) <<< Map.filter filterContracts <$> getState
+      }
 
   contractStateStream <- contractsStates
     pollingInterval
