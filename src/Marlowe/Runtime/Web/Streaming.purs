@@ -43,7 +43,6 @@ import Data.Traversable (for, for_)
 import Data.TraversableWithIndex (forWithIndex)
 import Data.Tuple (fst)
 import Data.Tuple.Nested (type (/\), (/\))
-import Debug (traceM)
 import Effect (Effect)
 import Effect.Aff (Aff, Milliseconds, delay)
 import Effect.Aff.AVar as AVar
@@ -244,14 +243,9 @@ contractsTransactions (PollingInterval pollingInterval) requestInterval endpoint
       delay pollingInterval
 
     sync contractId = do
-      traceM "SYNCING TRANSACTION OF"
-      traceM contractId
       liftEffect endpointsSources.live >>= Map.lookup contractId >>> case _ of
-        Nothing -> do
-          traceM "CONTRACT NOT FOUND"
-          pure unit
+        Nothing -> pure unit
         Just endpoint -> do
-          traceM "CONTRACT FOUND"
           void $ fetchContractTransactions contractId endpoint listener serverUrl transactionsRef
 
   pure $ ContractTransactionsStream
