@@ -14,12 +14,14 @@ import Data.Argonaut.Decode.Combinators ((.:))
 import Data.Argonaut.Decode.Decoders (decodeJObject, decodeMaybe)
 import Data.Array (catMaybes)
 import Data.Array as Array
+import Data.BigInt.Argonaut (BigInt)
 import Data.DateTime (DateTime)
 import Data.DateTime.ISO (ISO(..))
-import Data.Either (Either, note)
+import Data.Either (Either(..), note)
 import Data.Generic.Rep (class Generic)
 import Data.Int as Int
 import Data.JSDate as JSDate
+import Data.List (List)
 import Data.Map (Map)
 import Data.Map as Map
 import Data.Maybe (Maybe(..))
@@ -517,6 +519,7 @@ instance Show Payout where
 type ContractStateRow = ContractHeadersRowBase
   ( initialContract :: V1.Contract
   , currentContract :: Maybe V1.Contract
+  , assets :: C.UTxOValue
   , state :: Maybe V1.State
   , utxo :: Maybe TxOutRef
   , txBody :: Maybe (TextEnvelope TransactionObject)
@@ -529,13 +532,54 @@ derive instance Generic ContractState _
 derive instance Newtype ContractState _
 derive instance Eq ContractState
 
+-- { "lovelace": 0,
+--   "tokens": {
+--     "currencySymbol1": {
+--       "tokenName1": 890n,
+--       "tokenName2": 999n,
+--     },
+--     "currencySymbol2": {
+--       "tokenName3": 98000n,
+--     },
+--   }
+-- }
+decodeAssets :: JsonParser C.UTxOValue
+decodeAssets json = do
+  obj <- decodeJson json
+  (nonAdaObj :: Object (Object BigInt)) <- obj .: "tokens" >>= decodeJson
+  let
+    nonAdaLists :: List (String /\ List (String /\ BigInt))
+    nonAdaLists = Object.toUnfoldable $ map Object.toUnfoldable nonAdaObj
+  lovelace <- (obj .: "lovelace" >>= decodeJson) <#> C.Lovelace
+  (nonAdaLists' :: List (C.PolicyId /\ (List (C.AssetName /\ C.Quantity)))) <- for nonAdaLists \(policyIdStr /\ tsList) -> do
+    case C.policyIdFromHexString policyIdStr of
+      Just policyId -> do
+        tsList' <- for tsList \(assetNameStr /\ quantity) -> do
+          case C.assetNameFromHexString assetNameStr of
+            Just assetName -> pure $ assetName /\ C.Quantity quantity
+            Nothing -> Left $ TypeMismatch $ "Expecting an asset name but got: " <> show assetNameStr
+        pure $ policyId /\ tsList'
+      Nothing -> Left $ TypeMismatch $ "Expecting an asset name but got: " <> show policyIdStr
+
+  let
+    nonAdaAssets = C.NonAdaAssets $ Map.fromFoldable do
+      policyId /\ tokensWithQuantities <- nonAdaLists'
+      assetName /\ quantity <- tokensWithQuantities
+      pure ((policyId /\ assetName) /\ quantity)
+
+  pure $ C.UTxOValue { lovelace, nonAdaAssets }
+
+
 instance DecodeJson ContractState where
   decodeJson = decodeNewtypedRecord decoders
     where
+
     decoders =
       metadataFieldDecoder
         `Record.merge`
-          { txBody: map (decodeMaybe decodeTransactionObjectTextEnvelope) :: Maybe _ -> Maybe _ }
+          { txBody: map (decodeMaybe decodeTransactionObjectTextEnvelope) :: Maybe _ -> Maybe _
+          , assets: map decodeAssets :: Maybe _ -> Maybe _
+          }
 
 type TxRowBase r =
   ( contractId :: TxOutRef

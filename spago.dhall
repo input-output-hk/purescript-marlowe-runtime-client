@@ -54,7 +54,7 @@
   , "variant"
   ]
 , license = "apache"
-, name = "my-project"
+, name = "marlowe-runtime-client"
 , packages = ./packages.dhall
 , repository = "https://github.com/input-output-hk/purescript-marlowe-runtime-client"
 , sources = [ "src/**/*.purs", "test/**/*.purs" ]
