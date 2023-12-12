@@ -53,6 +53,7 @@ import Type.Row.Homogeneous as Row
 newtype ApiError error = ApiError
   { message :: String
   , error :: error
+  , details :: Json
   }
 
 derive instance Generic (ApiError err) _
@@ -64,14 +65,14 @@ decodeApiError decodeError json = do
   message <- obj .: "message"
   errorCode <- obj .: "errorCode"
   details <- obj .: "details"
-  pure $ ApiError { message, error: decodeError errorCode details }
+  pure $ ApiError { message, error: decodeError errorCode details, details }
 
 instance DecodeJson (ApiError String) where
   decodeJson = decodeApiError $ \errorCode details -> errorCode <> ": " <> stringify details
 
 instance Show err => Show (ApiError err) where
-  show (ApiError { message, error }) =
-    "ApiError { message: " <> show message <> ", error: " <> show error <> " }"
+  show (ApiError { message, error, details }) =
+    "ApiError { message: " <> show message <> ", error: " <> show error <> ", details: " <> stringify details <> " }"
 
 -- FIXME: move this part to `Contrib.Cardano`
 
@@ -827,74 +828,83 @@ type TransactionsEndpointRow r = ("transactions" :: Maybe TransactionsEndpoint |
 type PostContractsResponse = ResourceWithLinks PostContractsResponseContent (ContractEndpointRow + ())
 
 data PostContractsError
-  = MintingUtxoNotFound
-  | RoleTokenNotFound
-  | ToCardanoError
-  | MissingMarloweInput
-  | PayoutInputNotFound
+  = AddressDecodingFailed
+  | BalancingError
   | CalculateMinUtxoFailed
   | CoinSelectionFailed
-  | BalancingError
-  | MarloweContractNotFound
-  | MarloweContractVersionMismatch
-  | LoadMarloweContextToCardanoError
-  | MarloweScriptNotPublished
-  | PayoutScriptNotPublished
+  | CreateToCardanoError
   | ExtractCreationError
   | ExtractMarloweTransactionError
-  | MintingUtxoSelectionFailed
-  | AddressDecodingFailed
-  | MintingScriptDecodingFailed
-  | CreateToCardanoError
   | InternalError
+  | LoadMarloweContextErrorNotFound
+  | LoadMarloweContextErrorVersionMismatch
+  | LoadMarloweContextToCardanoError
+  | MarloweComputeTransactionFailed
+  | MarloweContractNotFound
+  | MarloweContractVersionMismatch
+  | MarloweScriptNotPublished
+  | MintingScriptDecodingFailed
+  | MintingUtxoNotFound
+  | MintingUtxoSelectionFailed
+  | MissingMarloweInput
+  | PayoutInputNotFound
+  | PayoutScriptNotPublished
+  | RoleTokenNotFound
+  | ToCardanoError
   | UnknownError String
 
 postContractsFromString :: String -> PostContractsError
 postContractsFromString = case _ of
-  "MintingUtxoNotFound" -> MintingUtxoNotFound
-  "RoleTokenNotFound" -> RoleTokenNotFound
-  "ToCardanoError" -> ToCardanoError
-  "MissingMarloweInput" -> MissingMarloweInput
-  "PayoutInputNotFound" -> PayoutInputNotFound
+  "AddressDecodingFailed" -> AddressDecodingFailed
+  "BalancingError" -> BalancingError
   "CalculateMinUtxoFailed" -> CalculateMinUtxoFailed
   "CoinSelectionFailed" -> CoinSelectionFailed
-  "BalancingError" -> BalancingError
-  "MarloweContractNotFound" -> MarloweContractNotFound
-  "MarloweContractVersionMismatch" -> MarloweContractVersionMismatch
-  "LoadMarloweContextToCardanoError" -> LoadMarloweContextToCardanoError
-  "MarloweScriptNotPublished" -> MarloweScriptNotPublished
-  "PayoutScriptNotPublished" -> PayoutScriptNotPublished
+  "CreateToCardanoError" -> CreateToCardanoError
   "ExtractCreationError" -> ExtractCreationError
   "ExtractMarloweTransactionError" -> ExtractMarloweTransactionError
-  "MintingUtxoSelectionFailed" -> MintingUtxoSelectionFailed
-  "AddressDecodingFailed" -> AddressDecodingFailed
-  "MintingScriptDecodingFailed" -> MintingScriptDecodingFailed
-  "CreateToCardanoError" -> CreateToCardanoError
   "InternalError" -> InternalError
+  "LoadMarloweContextToCardanoError" -> LoadMarloweContextToCardanoError
+  "LoadMarloweContextErrorNotFound" -> LoadMarloweContextErrorNotFound
+  "LoadMarloweContextErrorVersionMismatch" -> LoadMarloweContextErrorVersionMismatch
+  "MarloweComputeTransactionFailed" -> MarloweComputeTransactionFailed
+  "MarloweContractNotFound" -> MarloweContractNotFound
+  "MarloweContractVersionMismatch" -> MarloweContractVersionMismatch
+  "MarloweScriptNotPublished" -> MarloweScriptNotPublished
+  "MintingScriptDecodingFailed" -> MintingScriptDecodingFailed
+  "MintingUtxoNotFound" -> MintingUtxoNotFound
+  "MintingUtxoSelectionFailed" -> MintingUtxoSelectionFailed
+  "MissingMarloweInput" -> MissingMarloweInput
+  "PayoutInputNotFound" -> PayoutInputNotFound
+  "PayoutScriptNotPublished" -> PayoutScriptNotPublished
+  "RoleTokenNotFound" -> RoleTokenNotFound
+  "ToCardanoError" -> ToCardanoError
   msg -> UnknownError msg
 
 instance Show PostContractsError where
   show = case _ of
-    MintingUtxoNotFound -> "MintingUtxoNotFound"
-    RoleTokenNotFound -> "RoleTokenNotFound"
-    ToCardanoError -> "ToCardanoError"
-    MissingMarloweInput -> "MissingMarloweInput"
-    PayoutInputNotFound -> "PayoutInputNotFound"
+    AddressDecodingFailed -> "AddressDecodingFailed"
+    BalancingError -> "BalancingError"
     CalculateMinUtxoFailed -> "CalculateMinUtxoFailed"
     CoinSelectionFailed -> "CoinSelectionFailed"
-    BalancingError -> "BalancingError"
-    MarloweContractNotFound -> "MarloweContractNotFound"
-    MarloweContractVersionMismatch -> "MarloweContractVersionMismatch"
-    LoadMarloweContextToCardanoError -> "LoadMarloweContextToCardanoError"
-    MarloweScriptNotPublished -> "MarloweScriptNotPublished"
-    PayoutScriptNotPublished -> "PayoutScriptNotPublished"
+    CreateToCardanoError -> "CreateToCardanoError"
     ExtractCreationError -> "ExtractCreationError"
     ExtractMarloweTransactionError -> "ExtractMarloweTransactionError"
-    MintingUtxoSelectionFailed -> "MintingUtxoSelectionFailed"
-    AddressDecodingFailed -> "AddressDecodingFailed"
-    MintingScriptDecodingFailed -> "MintingScriptDecodingFailed"
-    CreateToCardanoError -> "CreateToCardanoError"
     InternalError -> "InternalError"
+    LoadMarloweContextToCardanoError -> "LoadMarloweContextToCardanoError"
+    LoadMarloweContextErrorNotFound -> "LoadMarloweContextErrorNotFound"
+    LoadMarloweContextErrorVersionMismatch -> "LoadMarloweContextErrorVersionMismatch"
+    MarloweComputeTransactionFailed -> "MarloweComputeTransactionFailed"
+    MarloweContractNotFound -> "MarloweContractNotFound"
+    MarloweContractVersionMismatch -> "MarloweContractVersionMismatch"
+    MarloweScriptNotPublished -> "MarloweScriptNotPublished"
+    MintingScriptDecodingFailed -> "MintingScriptDecodingFailed"
+    MintingUtxoNotFound -> "MintingUtxoNotFound"
+    MintingUtxoSelectionFailed -> "MintingUtxoSelectionFailed"
+    MissingMarloweInput -> "MissingMarloweInput"
+    PayoutInputNotFound -> "PayoutInputNotFound"
+    PayoutScriptNotPublished -> "PayoutScriptNotPublished"
+    RoleTokenNotFound -> "RoleTokenNotFound"
+    ToCardanoError -> "ToCardanoError"
     UnknownError msg -> "(UnknownError " <> msg <> ")"
 
 instance DecodeJson (ApiError PostContractsError) where
