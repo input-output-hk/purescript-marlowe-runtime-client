@@ -49,6 +49,8 @@ import URI.HostPortPair as HostPortPair
 import URI.URIRef (Fragment, HierPath, Host, Path, Port, RelPath, URIRefOptions, UserInfo) as URI
 import URI.URIRef as URIRef
 
+-- Should we use Variant here so we can be more
+-- precise in different cases?
 data ClientError err
   = FetchError FetchError
   | ResponseDecodingError JsonDecodeError
@@ -121,7 +123,8 @@ getResource (ServerURL serverUrl) endpoint extraParams extraHeaders = do
 
   runExceptT do
     res@{ status, headers: resHeaders } <- ExceptT $ fetchEither url { headers: reqHeaders, mode: Cors } allowedStatusCodes FetchError
-    lift (jsonBody res) >>= decodeResponse' status >>> case _ of
+    json <- ExceptT $ lmap FetchError <$> jsonBody res
+    case decodeResponse' status json of
       Left err -> throwError err
       Right payload -> pure { payload, headers: resHeaders, status }
 
@@ -193,7 +196,8 @@ merkleize (ServerURL serverUrl) req = runExceptT do
       }
 
   res@{ status, headers: resHeaders } <- ExceptT $ fetchEither url { method: POST, body, headers } allowedStatusCodes FetchError
-  lift (jsonBody res) >>= decodeResponse' status >>> case _ of
+  json <- ExceptT $ lmap FetchError <$> jsonBody res
+  case decodeResponse' status json of
     Left err -> throwError err
     Right payload -> pure { payload, headers: resHeaders, status }
 
@@ -479,7 +483,8 @@ post (ServerURL serverUrl) (IndexEndpoint (ResourceLink path)) req = runExceptT 
         $ (encodeHeaders req :: { | extraHeaders })
 
   response@{ status } <- ExceptT $ fetchEither url { method: POST, body, headers } allowedStatusCodes FetchError
-  (lift (jsonBody response)) >>= decodeResponseWithLink (map decodeJson :: Maybe _ -> Maybe _) status >>> case _ of
+  json <- ExceptT $ lmap FetchError <$> jsonBody response
+  case decodeResponseWithLink (map decodeJson :: Maybe _ -> Maybe _) status json of
     Left err -> throwError err
     Right payload -> pure payload
 
@@ -505,17 +510,17 @@ post' serverUrl endpoint req = do
   post serverUrl endpoint' req
 
 put
-  :: forall links putRequest getResponse extraHeaders
+  :: forall err links putRequest getResponse extraHeaders
    . EncodeHeaders putRequest extraHeaders
   => EncodeJsonBody putRequest
+  => DecodeJson (ApiError err)
   => Row.Homogeneous extraHeaders String
   => Row.Homogeneous ("Content-Type" :: String | extraHeaders) String
-  -- => Row.Lacks "Accept" extraHeaders
   => Row.Lacks "Content-Type" extraHeaders
   => ServerURL
   -> ResourceEndpoint putRequest getResponse links
   -> putRequest
-  -> Aff (Either FetchError Unit)
+  -> Aff (Either (ClientError err) Unit)
 put (ServerURL serverUrl) (ResourceEndpoint (ResourceLink path)) req = runExceptT do
   let
     url = serverUrl <> "/" <> path
@@ -526,22 +531,30 @@ put (ServerURL serverUrl) (ResourceEndpoint (ResourceLink path)) req = runExcept
       -- R.insert (Proxy :: Proxy "Accept") "application/json"
       R.insert (Proxy :: Proxy "Content-Type") "application/json"
         $ (encodeHeaders req :: { | extraHeaders })
-  void $ ExceptT $ fetchEither url { method: PUT, body, headers } allowedStatusCodes identity
+  response@{ status: statusCode } <- ExceptT $ fetchEither url { method: PUT, body, headers } allowedStatusCodes FetchError
+  if statusCode >= 200 && statusCode < 300
+    then pure unit
+    else do
+      json <- ExceptT $ lmap FetchError <$> jsonBody response
+      case decodeJson json of
+        Left err -> throwError $ ResponseDecodingError err
+        Right payload -> throwError $ ServerApiError payload
 
 put'
-  :: forall links putRequest getResponse extraHeaders t
+  :: forall err links putRequest getResponse extraHeaders t
    . EncodeHeaders putRequest extraHeaders
   => EncodeJsonBody putRequest
+  => DecodeJson (ApiError err)
   => Newtype t (ResourceEndpoint putRequest getResponse links)
   => Row.Homogeneous extraHeaders String
   => Row.Homogeneous ("Content-Type" :: String | extraHeaders) String
-  -- => Row.Lacks "Accept" extraHeaders
   => Row.Lacks "Content-Type" extraHeaders
   => ServerURL
   -> t
   -> putRequest
-  -> Aff (Either FetchError Unit)
+  -> Aff (Either (ClientError err) Unit)
 put' serverUrl endpoint req = do
   let
     endpoint' = unwrap endpoint
   put serverUrl endpoint' req
+

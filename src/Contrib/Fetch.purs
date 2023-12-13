@@ -105,5 +105,7 @@ fetchV url r allowedStatusCodes = do
   else throwError $ handleError $ InvalidStatusCode res
 
 -- For the full safety we should introduce a newtype wrapper for the Response record
-jsonBody :: Response -> Aff Json
-jsonBody response = unsafeCoerce <$> response.json
+jsonBody :: Response -> Aff (Either FetchError Json)
+jsonBody response = (Right <<< unsafeCoerce <$> response.json) `catchError` \err -> do
+  pure $ Left $ FetchError err
+
