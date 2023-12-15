@@ -230,3 +230,49 @@ in  upstream
         ]
         "https://github.com/CarstenKoenig/purescript-errors.git"
         "edfd8b1a285920e725a7fec32e736c5d59561772"
+
+  with polyform =
+      mkPackage
+        [ "js-unsafe-stringify"
+        , "newtype"
+        , "ordered-collections"
+        , "variant"
+        , "profunctor"
+        , "invariant"
+        , "foreign-object"
+        , "run"
+        , "transformers"
+        , "validation"
+        , "foreign"
+        ]
+        "https://github.com/purescript-polyform/polyform.git"
+        "v0.9.2"
+
+  with polyform-batteries-core =
+      mkPackage
+        [ "debug"
+        , "decimals"
+        , "filterable"
+        , "numbers"
+        , "polyform"
+        , "prelude"
+        , "record-extra"
+        , "test-unit"
+        ]
+        "https://github.com/purescript-polyform/batteries-core.git"
+        "v0.3.0"
+
+  with polyform-batteries-env =
+      mkPackage
+        [ "arrays"
+        , "identity"
+        , "maybe"
+        , "ordered-collections"
+        , "polyform"
+        , "polyform-batteries-core"
+        , "prelude"
+        , "psci-support"
+        , "typelevel-prelude"
+        ]
+        "https://github.com/purescript-polyform/batteries-env.git"
+        "v0.2.0"

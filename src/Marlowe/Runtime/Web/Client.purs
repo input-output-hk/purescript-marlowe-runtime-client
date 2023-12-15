@@ -4,12 +4,12 @@ import Prelude
 
 import Contrib.Data.Argonaut (JsonParser)
 import Contrib.Data.Argonaut.Generic.Record (class DecodeRecord, DecodeJsonFieldFn)
-import Contrib.Fetch (FetchError, StatusCode, fetchEither, jsonBody)
+import Contrib.Fetch (FetchError, StatusCode, fetchEither, fetchErrorToJson, jsonBody)
 import Control.Alt ((<|>))
 import Control.Monad.Except (ExceptT(..), except, runExceptT, throwError)
 import Control.Monad.Loops (unfoldrM)
 import Control.Monad.Trans.Class (lift)
-import Data.Argonaut (class DecodeJson, Json, JsonDecodeError, decodeJson, jsonParser, stringify)
+import Data.Argonaut (class DecodeJson, class EncodeJson, Json, JsonDecodeError, decodeJson, encodeJson, jsonParser, stringify)
 import Data.Argonaut.Decode ((.:))
 import Data.Bifunctor (lmap)
 import Data.Either (Either(..), either, fromRight, hush, note)
@@ -23,7 +23,6 @@ import Data.List as List
 import Data.Map (fromFoldable, lookup)
 import Data.Maybe (Maybe(..))
 import Data.Newtype (class Newtype, unwrap)
-import Data.Show.Generic (genericShow)
 import Data.String as String
 import Data.String.CaseInsensitive (CaseInsensitiveString(..))
 import Data.Tuple.Nested (type (/\), (/\))
@@ -53,14 +52,51 @@ import URI.URIRef as URIRef
 -- precise in different cases?
 data ClientError err
   = FetchError FetchError
-  | ResponseDecodingError JsonDecodeError
+  | ResponseDecodingError Json JsonDecodeError
   | HealthCheckError String
   | MerkleizationError
-  | ServerApiError (ApiError err)
+  | ServerApiError
+    { error :: ApiError err
+    , statusCode :: StatusCode
+    , body :: Json
+    }
 
 derive instance Generic (ClientError err) _
 instance Show err => Show (ClientError err) where
-  show = genericShow
+  show (FetchError err) = "FetchError (" <> show err <> ")"
+  show (ResponseDecodingError json err) = "ResponseDecodingError (" <> stringify json <> ") (" <> show err <> ")"
+  show (HealthCheckError err) = "HealthCheckError (" <> err <> ")"
+  show MerkleizationError = "MerkleizationError"
+  show (ServerApiError { error, statusCode, body }) =
+    "ServerApiError {"
+    <> "error: " <> show error
+    <> ", " <> "statusCode: " <> show statusCode
+    <> ", " <> "body: " <> stringify body
+    <> "}"
+
+clientErrorToJson :: forall err. (ApiError err -> Json) -> ClientError err -> Json
+clientErrorToJson customEncodeJson = case _ of
+  FetchError err -> fetchErrorToJson err
+  ResponseDecodingError json err -> encodeJson
+    { responseDecodingError:
+        { json: json
+        , err: show err
+        }
+    }
+  HealthCheckError err -> encodeJson
+    { heathCheckError: err
+    }
+  MerkleizationError -> encodeJson "MerkleizationError"
+  ServerApiError { error, body, statusCode } -> encodeJson
+    { serverApiError:
+        { error: customEncodeJson error
+        , statusCode: statusCode
+        , body: body
+        }
+    }
+
+clientErrorToJson' :: forall err. EncodeJson (ApiError err) => ClientError err -> Json
+clientErrorToJson' = clientErrorToJson encodeJson
 
 type GetResourceResponse err res = Either (ClientError err) res
 
@@ -81,9 +117,9 @@ decodeResponse parseA = do
       parseA res
   case _, _ of
     statusCode, json | statusCode >= 200 && statusCode < 300 ->
-      lmap ResponseDecodingError (decodePossibleResults json <|> parseA json)
-    _, json -> Left $
-      either ResponseDecodingError ServerApiError (decodeJson json)
+      lmap (ResponseDecodingError json) (decodePossibleResults json <|> parseA json)
+    statusCode, json -> Left $
+      either (ResponseDecodingError json) (ServerApiError <<< { body: json, statusCode, error: _ }) (decodeJson json)
 
 decodeResponse' :: forall a err. DecodeJson a => DecodeJson (ApiError err) => StatusCode -> Json -> Either (ClientError err) a
 decodeResponse' = decodeResponse decodeJson
@@ -169,7 +205,6 @@ getHealthCheck (ServerURL serverUrl) = runExceptT do
 
   pure $ HealthCheck
     { networkId, nodeTip, runtimeChainTip, runtimeTip, runtimeVersion }
-
 
 merkleize
   :: forall err
@@ -537,8 +572,12 @@ put (ServerURL serverUrl) (ResourceEndpoint (ResourceLink path)) req = runExcept
     else do
       json <- ExceptT $ lmap FetchError <$> jsonBody response
       case decodeJson json of
-        Left err -> throwError $ ResponseDecodingError err
-        Right payload -> throwError $ ServerApiError payload
+        Left err -> throwError $ ResponseDecodingError json err
+        Right payload -> throwError $ ServerApiError
+          { error: payload
+          , body: json
+          , statusCode
+          }
 
 put'
   :: forall err links putRequest getResponse extraHeaders t

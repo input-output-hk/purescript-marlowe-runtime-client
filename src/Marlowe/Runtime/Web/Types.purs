@@ -8,12 +8,15 @@ import CardanoMultiplatformLib.Transaction (TransactionObject, TransactionWitnes
 import CardanoMultiplatformLib.Types (unsafeBech32)
 import Contrib.Data.Argonaut (JsonParser, JsonParserResult, decodeFromString)
 import Contrib.Data.Argonaut.Generic.Record (class DecodeRecord, DecodeJsonFieldFn, decodeRecord, decodeNewtypedRecord)
+import Control.Alt ((<|>))
 import Data.Argonaut (class DecodeJson, class EncodeJson, Json, JsonDecodeError(..), decodeJson, encodeJson, stringify)
 import Data.Argonaut.Core (isString)
 import Data.Argonaut.Decode.Combinators ((.:))
 import Data.Argonaut.Decode.Decoders (decodeJObject, decodeMaybe)
 import Data.Array (catMaybes)
 import Data.Array as Array
+import Data.Array.NonEmpty (NonEmptyArray)
+import Data.Array.NonEmpty as NonEmptyArray
 import Data.BigInt.Argonaut (BigInt)
 import Data.DateTime (DateTime)
 import Data.DateTime.ISO (ISO(..))
@@ -66,6 +69,9 @@ decodeApiError decodeError json = do
   errorCode <- obj .: "errorCode"
   details <- obj .: "details"
   pure $ ApiError { message, error: decodeError errorCode details, details }
+
+encodeApiError :: forall err. EncodeJson err => ApiError err -> Json
+encodeApiError (ApiError { message, error, details }) = encodeJson { message, error, details }
 
 instance DecodeJson (ApiError String) where
   decodeJson = decodeApiError $ \errorCode details -> errorCode <> ": " <> stringify details
@@ -768,6 +774,220 @@ derive instance Newtype PostMerkleizationResponse _
 
 derive newtype instance DecodeJson PostMerkleizationResponse
 
+newtype ExCPU = ExCPU Int
+derive instance Newtype ExCPU _
+derive instance Eq ExCPU
+derive newtype instance DecodeJson ExCPU
+
+newtype ExMemory = ExMemory Int
+derive instance Newtype ExMemory _
+derive instance Eq ExMemory
+derive newtype instance DecodeJson ExMemory
+
+data ExBudget = ExBudget { exBudgetCPU :: ExCPU, exBudgetMemory :: ExMemory }
+derive instance Eq ExBudget
+
+instance DecodeJson ExBudget where
+  decodeJson json = do
+    obj <- decodeJson json
+    exBudgetCPU <- obj .: "exCPU"
+    exBudgetMemory <- obj .: "exMemory"
+    pure $ ExBudget { exBudgetCPU, exBudgetMemory }
+
+data AddressCredential = PubKeyCredential String | ScriptCredential String
+derive instance Eq AddressCredential
+
+instance DecodeJson AddressCredential where
+  decodeJson json = do
+    obj <- decodeJson json
+    let
+      decodePubKeyCredential = do
+        str <- obj .: "pubKeyCredential"
+        pure $ PubKeyCredential str
+      decodeScriptCredential = do
+        str <- obj .: "scriptCredential"
+        pure $ ScriptCredential str
+    decodePubKeyCredential <|> decodeScriptCredential
+
+data StakingCredential = StakingHash AddressCredential | StakingPtr Int Int Int
+derive instance Eq StakingCredential
+
+instance DecodeJson StakingCredential where
+  decodeJson json = do
+    obj <- decodeJson json
+    let
+      decodeStakingHash = do
+        credential <- obj .: "stakingHash"
+        pure $ StakingHash credential
+      decodeStakingPtr = do
+        obj .: "stakingPtr" >>= case _ of
+          [x, y, z] -> pure $ StakingPtr x y z
+          _ -> Left $ TypeMismatch "Expecting an array of 3 elements for StakingPtr"
+    decodeStakingHash <|> decodeStakingPtr
+
+newtype AddressInfo = AddressInfo
+  { addressCredential :: AddressCredential
+  , stakeCredential :: Maybe StakingCredential
+  }
+derive instance Eq AddressInfo
+
+instance DecodeJson AddressInfo where
+  decodeJson json = do
+    obj <- decodeJson json
+    addressCredential <- obj .: "addressCredential"
+    stakeCredential <- obj .: "stakeCredential"
+    pure $ AddressInfo { addressCredential, stakeCredential }
+
+data SafetyError
+  = -- | Roles are present but there is no roles currency.
+    MissingRolesCurrency
+  | -- | No roles are present but there is a roles currency.
+    ContractHasNoRoles
+  | -- | A required role is not minted.
+    MissingRoleToken V1.TokenName
+  | -- | A role is minted but not required.
+    ExtraRoleToken V1.TokenName
+  | -- | A role name is longer than the 32 bytes allowed by the ledger.
+    RoleNameTooLong V1.TokenName
+  | -- | The currency symbol for a native asset is not 28 bytes long.
+    InvalidCurrencySymbol V1.CurrencySymbol
+  | -- | A token name is longer than the 32 bytes allowed by the ledger.
+    TokenNameTooLong V1.TokenName
+  | -- | A token name is associated with the ada symbol.
+    InvalidToken V1.Token
+  | -- | Initial account balance is not positive.
+    NonPositiveBalance V1.AccountId V1.Token
+  | -- | Duplicate account in state.
+    DuplicateAccount V1.AccountId V1.Token
+  | -- | Duplicate choice in state.
+    DuplicateChoice V1.ChoiceId
+  | -- | Duplicate bound value in state.
+    DuplicateBoundValue V1.ValueId
+  | -- | Too many tokens might be stored at some point in the contract.
+    MaximumValueMayExceedProtocol Int
+  | -- | The transaction size (in bytes) might be too large.
+    TransactionSizeMayExceedProtocol TransactionInfo Int
+  | -- | The transaction's execution cost might be too high.
+    TransactionCostMayExceedProtocol TransactionInfo ExBudget
+  | -- | The transaction does not validate.
+    TransactionValidationError TransactionInfo String
+  | -- | The transaction has warnings.
+    TransactionWarning TransactionInfo V1.TransactionWarning
+  | -- | The contract is missing a continuation not present in its continuation map.
+    MissingContinuation DatumHash
+  | -- | The contract contains both mainnet and testnet addresses.
+    InconsistentNetworks
+  | -- | The contract contains invalid addresses for the network.
+    WrongNetwork
+  | -- | The contract contains an illegal ledger address.
+    IllegalAddress AddressInfo
+  | -- | The safety analysis exceeded the allotted time.
+    SafetyAnalysisTimeout
+
+derive instance Eq SafetyError
+derive instance Generic SafetyError _
+
+-- * The above is Haskell but we want to port this to PureScript DecodeJson instance
+-- * But we want to also preserve the info about severity (`fatal`) and some detail
+newtype TransactionInfo = TransactionInfo
+  { state :: V1.State
+  , contract :: V1.Contract
+  , input :: V1.TransactionInput
+  , output :: V1.TransactionOutput
+  }
+derive instance Eq TransactionInfo
+
+instance DecodeJson TransactionInfo where
+  decodeJson json = do
+    obj <- decodeJson json
+    state <- obj .: "state"
+    contract <- obj .: "contract"
+    input <- obj .: "input"
+    output <- obj .: "output"
+    pure $ TransactionInfo { state, contract, input, output }
+
+newtype SafetyErrorInfo = SafetyErrorInfo
+  { detail :: String
+  , error :: SafetyError
+  , fatal :: Boolean
+  }
+derive instance Eq SafetyErrorInfo
+derive instance Newtype SafetyErrorInfo _
+
+safetyErrorInfo :: String -> SafetyError -> Boolean -> SafetyErrorInfo
+safetyErrorInfo detail error fatal = SafetyErrorInfo { detail, error, fatal }
+
+instance DecodeJson SafetyErrorInfo where
+  decodeJson json = do
+    obj <- decodeJson json
+    detail <- obj .: "detail"
+    fatal <- obj .: "fatal"
+    error <- obj .: "error"
+    case error of
+      "MissingRolesCurrency" -> pure $ safetyErrorInfo detail MissingRolesCurrency fatal
+      "ContractHasNoRoles" -> pure $ safetyErrorInfo detail ContractHasNoRoles fatal
+      "MissingRoleToken" -> do
+        roleName <- obj .: "role-name"
+        pure $ safetyErrorInfo detail (MissingRoleToken roleName) fatal
+      "ExtraRoleToken" -> do
+        roleName <- obj .: "role-name"
+        pure $ safetyErrorInfo detail (ExtraRoleToken roleName) fatal
+      "RoleNameTooLong" -> do
+        roleName <- obj .: "role-name"
+        pure $ safetyErrorInfo detail (RoleNameTooLong roleName) fatal
+      "InvalidCurrencySymbol" -> do
+        currencySymbol <- obj .: "currency-symbol"
+        pure $ safetyErrorInfo detail (InvalidCurrencySymbol currencySymbol) fatal
+      "TokenNameTooLong" -> do
+        tokenName <- obj .: "token-name"
+        pure $ safetyErrorInfo detail (TokenNameTooLong tokenName) fatal
+      "InvalidToken" -> do
+        token <- obj .: "token"
+        pure $ safetyErrorInfo detail (InvalidToken token) fatal
+      "NonPositiveBalance" -> do
+        accountId <- obj .: "account-id"
+        token <- obj .: "token"
+        pure $ safetyErrorInfo detail (NonPositiveBalance accountId token) fatal
+      "DuplicateAccount" -> do
+        accountId <- obj .: "account-id"
+        token <- obj .: "token"
+        pure $ safetyErrorInfo detail (DuplicateAccount accountId token) fatal
+      "DuplicateChoice" -> do
+        choiceId <- obj .: "choice-id"
+        pure $ safetyErrorInfo detail (DuplicateChoice choiceId) fatal
+      "DuplicateBoundValue" -> do
+        valueId <- obj .: "value-id"
+        pure $ safetyErrorInfo detail (DuplicateBoundValue valueId) fatal
+      "MaximumValueMayExceedProtocol" -> do
+        bytes <- obj .: "bytes"
+        pure $ safetyErrorInfo detail (MaximumValueMayExceedProtocol bytes) fatal
+      "TransactionSizeMayExceedProtocol" -> do
+        transaction <- obj .: "transaction"
+        bytes <- obj .: "bytes"
+        pure $ safetyErrorInfo detail (TransactionSizeMayExceedProtocol transaction bytes) fatal
+      "TransactionCostMayExceedProtocol" -> do
+        transaction <- obj .: "transaction"
+        cost <- obj .: "cost"
+        pure $ safetyErrorInfo detail (TransactionCostMayExceedProtocol transaction cost) fatal
+      "TransactionValidationError" -> do
+        transaction <- obj .: "transaction"
+        message <- obj .: "message"
+        pure $ safetyErrorInfo detail (TransactionValidationError transaction message) fatal
+      "TransactionWarning" -> do
+        transaction <- obj .: "transaction"
+        warning <- obj .: "warning"
+        pure $ safetyErrorInfo detail (TransactionWarning transaction warning) fatal
+      "MissingContinuation" -> do
+        hash <- obj .: "hash"
+        pure $ safetyErrorInfo detail (MissingContinuation hash) fatal
+      "InconsistentNetworks" -> pure $ safetyErrorInfo detail InconsistentNetworks fatal
+      "WrongNetwork" -> pure $ safetyErrorInfo detail WrongNetwork fatal
+      "IllegalAddress" -> do
+        address <- obj .: "address"
+        pure $ safetyErrorInfo detail (IllegalAddress address) fatal
+      "SafetyAnalysisTimeout" -> pure $ safetyErrorInfo detail SafetyAnalysisTimeout fatal
+      _ -> Left $ TypeMismatch $ "Invalid safety error: " <> error
+
 newtype PostContractsRequest = PostContractsRequest
   { metadata :: Metadata
   -- , version :: MarloweVersion
@@ -808,18 +1028,28 @@ instance EncodeHeaders PostContractsRequest PostContractsHeadersRow where
     -- , "X-Collateral-UTxO": String.joinWith "," (map txOutRefToString collateralUTxOs)
     }
 
--- FIXME: paluh. Change `txBody` to `tx` because we send(ing) on our branch the actual transaction and not
--- just the body.
-newtype PostContractsResponseContent = PostContractsResponseContent
+data PostContractsResponseContent
+  = PostContractsResponseContent
+    { contractId :: TxOutRef
+    , tx :: TextEnvelope TransactionObject
+    }
+  | PostContractsResponseSafetyErrors (NonEmptyArray SafetyErrorInfo)
+
+type PostContractsResponseRecord =
   { contractId :: TxOutRef
   , tx :: TextEnvelope TransactionObject
+  , safetyErrors :: Array SafetyErrorInfo
   }
 
-derive instance Newtype PostContractsResponseContent _
-
 instance DecodeJson PostContractsResponseContent where
-  decodeJson = decodeNewtypedRecord
-    { tx: map decodeTransactionObjectTextEnvelope :: Maybe _ -> Maybe _ }
+  decodeJson json = do
+    (record :: PostContractsResponseRecord) <- decodeRecord
+      { tx: map decodeTransactionObjectTextEnvelope :: Maybe _ -> Maybe _
+      }
+      json
+    case NonEmptyArray.fromArray record.safetyErrors of
+      Just safetyErrors -> pure $ PostContractsResponseSafetyErrors safetyErrors
+      Nothing -> pure $ PostContractsResponseContent { contractId: record.contractId, tx: record.tx }
 
 type ContractEndpointRow r = ("contract" :: ContractEndpoint | r)
 
