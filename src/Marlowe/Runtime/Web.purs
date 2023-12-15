@@ -4,5 +4,5 @@ module Marlowe.Runtime.Web
   ) where
 
 import Marlowe.Runtime.Web.Client (ClientError(..), getHealthCheck, getPage', getPage, post, post') as Client
-import Marlowe.Runtime.Web.Types (ApiError(..), runtime, Runtime(..)) as Types
+import Marlowe.Runtime.Web.Types (AddressInfo(..), ApiError(..), DatumHash(..), ExBudget(..), runtime, Runtime(..), SafetyErrorInfo(..), SafetyError(..), TransactionInfo(..)) as Types
 
