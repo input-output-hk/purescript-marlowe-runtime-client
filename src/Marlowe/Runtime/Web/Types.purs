@@ -1057,88 +1057,127 @@ type TransactionsEndpointRow r = ("transactions" :: Maybe TransactionsEndpoint |
 
 type PostContractsResponse = ResourceWithLinks PostContractsResponseContent (ContractEndpointRow + ())
 
+--    "CreateEraUnsupported" Null 503
+--    CreateConstraintError
+--          | MintingUtxoNotFound TxOutRef
+--          | RoleTokenNotFound AssetId
+--          | ToCardanoError
+--          | MissingMarloweInput
+--          | PayoutNotFound TxOutRef
+--          | InvalidPayoutDatum TxOutRef (Maybe Chain.Datum)
+--          | InvalidHelperDatum TxOutRef (Maybe Chain.Datum)
+--          | InvalidPayoutScriptAddress TxOutRef Address
+--          | CalculateMinUtxoFailed String
+--          | CoinSelectionFailed String
+--          | BalancingError String
+--          | MarloweInputInWithdraw
+--          | MarloweOutputInWithdraw
+--          | PayoutOutputInWithdraw
+--          | PayoutInputInCreateOrApply
+--          | UnknownPayoutScript ScriptHash
+--          | HelperScriptNotFound Chain.TokenName
+--    CreateLoadMarloweContextFailed err ->
+--          | LoadMarloweContextErrorNotFound
+--          | LoadMarloweContextErrorVersionMismatch SomeMarloweVersion
+--          | LoadMarloweContextToCardanoError
+--          | MarloweScriptNotPublished ScriptHash
+--          | PayoutScriptNotPublished ScriptHash
+--          | ExtractCreationError ExtractCreationError
+--          | ExtractMarloweTransactionError ExtractMarloweTransactionError
+--    CreateBuildupFailed err ->
+--          | MintingUtxoSelectionFailed
+--          | AddressDecodingFailed
+--          | MintingScriptDecodingFailed
+--    "CreateToCardanoError" Null 400
+--    "SafetyAnalysisFailed" Null 400
+--    "Not found" Null 404
+--    "Internal error" Null 500
+--    "Bad Request" (object ["minimumRequiredDeposit" .= required]) 400
+--    "CreateLoadHelperContextFailed" Null
+
 data PostContractsError
   = AddressDecodingFailed
+  | BadRequest
   | BalancingError
   | CalculateMinUtxoFailed
   | CoinSelectionFailed
+  | CreateEraUnsupported
+  | CreateLoadHelperContextFailed
   | CreateToCardanoError
   | ExtractCreationError
   | ExtractMarloweTransactionError
+  | HelperScriptNotFound
   | InternalError
+  | InvalidHelperDatum
+  | InvalidPayoutDatum
+  | InvalidPayoutScriptAddress
   | LoadMarloweContextErrorNotFound
   | LoadMarloweContextErrorVersionMismatch
   | LoadMarloweContextToCardanoError
-  | MarloweComputeTransactionFailed
-  | MarloweContractNotFound
-  | MarloweContractVersionMismatch
+  | MarloweInputInWithdraw
+  | MarloweOutputInWithdraw
   | MarloweScriptNotPublished
   | MintingScriptDecodingFailed
   | MintingUtxoNotFound
   | MintingUtxoSelectionFailed
   | MissingMarloweInput
-  | PayoutInputNotFound
+  | NotFound
+  | PayoutInputInCreateOrApply
+  | PayoutNotFound
+  | PayoutOutputInWithdraw
   | PayoutScriptNotPublished
   | RoleTokenNotFound
+  | SafetyAnalysisFailed
   | ToCardanoError
   | UnknownError String
+  | UnknownPayoutScript
+derive instance Eq PostContractsError
+derive instance Generic PostContractsError _
 
-postContractsFromString :: String -> PostContractsError
-postContractsFromString = case _ of
+-- We want to have something like:
+postContractsErrorFromString :: String -> PostContractsError
+postContractsErrorFromString = case _ of
   "AddressDecodingFailed" -> AddressDecodingFailed
+  "BadRequest" -> BadRequest
   "BalancingError" -> BalancingError
   "CalculateMinUtxoFailed" -> CalculateMinUtxoFailed
   "CoinSelectionFailed" -> CoinSelectionFailed
+  "CreateEraUnsupported" -> CreateEraUnsupported
+  "CreateLoadHelperContextFailed" -> CreateLoadHelperContextFailed
   "CreateToCardanoError" -> CreateToCardanoError
   "ExtractCreationError" -> ExtractCreationError
   "ExtractMarloweTransactionError" -> ExtractMarloweTransactionError
+  "HelperScriptNotFound" -> HelperScriptNotFound
   "InternalError" -> InternalError
-  "LoadMarloweContextToCardanoError" -> LoadMarloweContextToCardanoError
+  "InvalidHelperDatum" -> InvalidHelperDatum
+  "InvalidPayoutDatum" -> InvalidPayoutDatum
+  "InvalidPayoutScriptAddress" -> InvalidPayoutScriptAddress
   "LoadMarloweContextErrorNotFound" -> LoadMarloweContextErrorNotFound
   "LoadMarloweContextErrorVersionMismatch" -> LoadMarloweContextErrorVersionMismatch
-  "MarloweComputeTransactionFailed" -> MarloweComputeTransactionFailed
-  "MarloweContractNotFound" -> MarloweContractNotFound
-  "MarloweContractVersionMismatch" -> MarloweContractVersionMismatch
+  "LoadMarloweContextToCardanoError" -> LoadMarloweContextToCardanoError
+  "MarloweInputInWithdraw" -> MarloweInputInWithdraw
+  "MarloweOutputInWithdraw" -> MarloweOutputInWithdraw
   "MarloweScriptNotPublished" -> MarloweScriptNotPublished
   "MintingScriptDecodingFailed" -> MintingScriptDecodingFailed
   "MintingUtxoNotFound" -> MintingUtxoNotFound
   "MintingUtxoSelectionFailed" -> MintingUtxoSelectionFailed
   "MissingMarloweInput" -> MissingMarloweInput
-  "PayoutInputNotFound" -> PayoutInputNotFound
+  "NotFound" -> NotFound
+  "PayoutInputInCreateOrApply" -> PayoutInputInCreateOrApply
+  "PayoutNotFound" -> PayoutNotFound
+  "PayoutOutputInWithdraw" -> PayoutOutputInWithdraw
   "PayoutScriptNotPublished" -> PayoutScriptNotPublished
   "RoleTokenNotFound" -> RoleTokenNotFound
+  "SafetyAnalysisFailed" -> SafetyAnalysisFailed
   "ToCardanoError" -> ToCardanoError
+  "UnknownPayoutScript" -> UnknownPayoutScript
   msg -> UnknownError msg
 
 instance Show PostContractsError where
-  show = case _ of
-    AddressDecodingFailed -> "AddressDecodingFailed"
-    BalancingError -> "BalancingError"
-    CalculateMinUtxoFailed -> "CalculateMinUtxoFailed"
-    CoinSelectionFailed -> "CoinSelectionFailed"
-    CreateToCardanoError -> "CreateToCardanoError"
-    ExtractCreationError -> "ExtractCreationError"
-    ExtractMarloweTransactionError -> "ExtractMarloweTransactionError"
-    InternalError -> "InternalError"
-    LoadMarloweContextToCardanoError -> "LoadMarloweContextToCardanoError"
-    LoadMarloweContextErrorNotFound -> "LoadMarloweContextErrorNotFound"
-    LoadMarloweContextErrorVersionMismatch -> "LoadMarloweContextErrorVersionMismatch"
-    MarloweComputeTransactionFailed -> "MarloweComputeTransactionFailed"
-    MarloweContractNotFound -> "MarloweContractNotFound"
-    MarloweContractVersionMismatch -> "MarloweContractVersionMismatch"
-    MarloweScriptNotPublished -> "MarloweScriptNotPublished"
-    MintingScriptDecodingFailed -> "MintingScriptDecodingFailed"
-    MintingUtxoNotFound -> "MintingUtxoNotFound"
-    MintingUtxoSelectionFailed -> "MintingUtxoSelectionFailed"
-    MissingMarloweInput -> "MissingMarloweInput"
-    PayoutInputNotFound -> "PayoutInputNotFound"
-    PayoutScriptNotPublished -> "PayoutScriptNotPublished"
-    RoleTokenNotFound -> "RoleTokenNotFound"
-    ToCardanoError -> "ToCardanoError"
-    UnknownError msg -> "(UnknownError " <> msg <> ")"
+  show = genericShow
 
 instance DecodeJson (ApiError PostContractsError) where
-  decodeJson = decodeApiError \code _ -> postContractsFromString code
+  decodeJson = decodeApiError \code _ -> postContractsErrorFromString code
 
 type GetContractsResponseContent = ContractHeader
 
@@ -1218,6 +1257,126 @@ derive instance Newtype PostTransactionsResponse _
 instance DecodeJson PostTransactionsResponse where
   decodeJson = decodeNewtypedRecord
     { txBody: map decodeTransactionObjectTextEnvelope :: Maybe _ -> Maybe _ }
+
+--    ApplyInputsEraUnsupported era -> ApiError ("Current network era not supported: " <> show era) "ApplyInputsEraUnsupported" Null 503
+--    ApplyInputsConstraintError err ->
+--        | MintingUtxoNotFound TxOutRef
+--        | RoleTokenNotFound AssetId
+--        | ToCardanoError
+--        | MissingMarloweInput
+--        | PayoutNotFound TxOutRef
+--        | InvalidPayoutDatum TxOutRef (Maybe Chain.Datum)
+--        | InvalidHelperDatum TxOutRef (Maybe Chain.Datum)
+--        | InvalidPayoutScriptAddress TxOutRef Address
+--        | CalculateMinUtxoFailed String
+--        | CoinSelectionFailed String
+--        | BalancingError String
+--        | MarloweInputInWithdraw
+--        | MarloweOutputInWithdraw
+--        | PayoutOutputInWithdraw
+--        | PayoutInputInCreateOrApply
+--        | UnknownPayoutScript ScriptHash
+--        | HelperScriptNotFound Chain.TokenName
+--    ApplyInputsLoadMarloweContextFailed
+--        | LoadMarloweContextErrorNotFound
+--        | LoadMarloweContextErrorVersionMismatch SomeMarloweVersion
+--        | LoadMarloweContextToCardanoError
+--        | MarloweScriptNotPublished ScriptHash
+--        | PayoutScriptNotPublished ScriptHash
+--        | ExtractCreationError ExtractCreationError
+--        | ExtractMarloweTransactionError ExtractMarloweTransactionError
+--    ApplyInputsConstraintsBuildupFailed err -> apiError err 400
+--        | MarloweComputeTransactionFailed String
+--        | UnableToDetermineTransactionTimeout
+--    "ScriptOutputNotFound" Null 400
+--    "SlotConversionFailed" Null 400
+--    "TipAtGenesis" Null 500
+--    "ValidityLowerBoundTooHigh" Null 400
+--    "ApplyInputsLoadHelperContextFailed" Null 503
+
+data PostTransactionsError
+  = ApplyInputsBalancingError
+  | ApplyInputsCalculateMinUtxoFailed
+  | ApplyInputsCoinSelectionFailed
+  | ApplyInputsEraUnsupported -- original ApplyInputs prefix
+  | ApplyInputsExtractCreationError
+  | ApplyInputsExtractMarloweTransactionError
+  | ApplyInputsHelperScriptNotFound
+  | ApplyInputsInvalidHelperDatum
+  | ApplyInputsInvalidPayoutDatum
+  | ApplyInputsInvalidPayoutScriptAddress
+  | ApplyInputsLoadHelperContextFailed -- Original ApplyInpts prefix
+  | ApplyInputsLoadMarloweContextErrorNotFound
+  | ApplyInputsLoadMarloweContextErrorVersionMismatch
+  | ApplyInputsLoadMarloweContextToCardanoError
+  | ApplyInputsMarloweComputeTransactionFailed
+  | ApplyInputsMarloweInputInWithdraw
+  | ApplyInputsMarloweOutputInWithdraw
+  | ApplyInputsMarloweScriptNotPublished
+  | ApplyInputsMintingUtxoNotFound
+  | ApplyInputsMissingMarloweInput
+  | ApplyInputsPayoutInputInCreateOrApply
+  | ApplyInputsPayoutNotFound
+  | ApplyInputsPayoutOutputInWithdraw
+  | ApplyInputsPayoutScriptNotPublished
+  | ApplyInputsRoleTokenNotFound
+  | ApplyInputsScriptOutputNotFound
+  | ApplyInputsSlotConversionFailed
+  | ApplyInputsTipAtGenesis
+  | ApplyInputsToCardanoError
+  | ApplyInputsUknownError String
+  | ApplyInputsUnableToDetermineTransactionTimeout
+  | ApplyInputsUnknownPayoutScript
+  | ApplyInputsValidityLowerBoundTooHigh
+
+-- We want to have something like:
+-- "ApplyInputsEraUnsupported" -> ApplyInputsEraUnsupported
+-- "MintingUtxoNotFound" -> ApplyInputsMintingUtxoNotFound
+postTransactionsErrorFromString :: String -> PostTransactionsError
+postTransactionsErrorFromString = case _ of
+  "ApplyInputsEraUnsupported" -> ApplyInputsEraUnsupported
+  "ApplyInputsLoadHelperContextFailed" -> ApplyInputsLoadHelperContextFailed
+  "BalancingError" -> ApplyInputsBalancingError
+  "CalculateMinUtxoFailed" -> ApplyInputsCalculateMinUtxoFailed
+  "CoinSelectionFailed" -> ApplyInputsCoinSelectionFailed
+  "EraUnsupported" -> ApplyInputsEraUnsupported
+  "ExtractCreationError" -> ApplyInputsExtractCreationError
+  "ExtractMarloweTransactionError" -> ApplyInputsExtractMarloweTransactionError
+  "HelperScriptNotFound" -> ApplyInputsHelperScriptNotFound
+  "InvalidHelperDatum" -> ApplyInputsInvalidHelperDatum
+  "InvalidPayoutDatum" -> ApplyInputsInvalidPayoutDatum
+  "InvalidPayoutScriptAddress" -> ApplyInputsInvalidPayoutScriptAddress
+  "LoadMarloweContextErrorNotFound" -> ApplyInputsLoadMarloweContextErrorNotFound
+  "LoadMarloweContextErrorVersionMismatch" -> ApplyInputsLoadMarloweContextErrorVersionMismatch
+  "LoadMarloweContextToCardanoError" -> ApplyInputsLoadMarloweContextToCardanoError
+  "MarloweComputeTransactionFailed" -> ApplyInputsMarloweComputeTransactionFailed
+  "MarloweInputInWithdraw" -> ApplyInputsMarloweInputInWithdraw
+  "MarloweOutputInWithdraw" -> ApplyInputsMarloweOutputInWithdraw
+  "MarloweScriptNotPublished" -> ApplyInputsMarloweScriptNotPublished
+  "MintingUtxoNotFound" -> ApplyInputsMintingUtxoNotFound
+  "MissingMarloweInput" -> ApplyInputsMissingMarloweInput
+  "PayoutInputInCreateOrApply" -> ApplyInputsPayoutInputInCreateOrApply
+  "PayoutNotFound" -> ApplyInputsPayoutNotFound
+  "PayoutOutputInWithdraw" -> ApplyInputsPayoutOutputInWithdraw
+  "PayoutScriptNotPublished" -> ApplyInputsPayoutScriptNotPublished
+  "RoleTokenNotFound" -> ApplyInputsRoleTokenNotFound
+  "ScriptOutputNotFound" -> ApplyInputsScriptOutputNotFound
+  "SlotConversionFailed" -> ApplyInputsSlotConversionFailed
+  "TipAtGenesis" -> ApplyInputsTipAtGenesis
+  "ToCardanoError" -> ApplyInputsToCardanoError
+  "UnableToDetermineTransactionTimeout" -> ApplyInputsUnableToDetermineTransactionTimeout
+  "UnknownPayoutScript" -> ApplyInputsUnknownPayoutScript
+  "ValidityLowerBoundTooHigh" -> ApplyInputsValidityLowerBoundTooHigh
+  msg -> ApplyInputsUknownError msg
+
+derive instance Eq PostTransactionsError
+derive instance Generic PostTransactionsError _
+
+instance Show PostTransactionsError where
+  show = genericShow
+
+instance DecodeJson (ApiError PostTransactionsError) where
+  decodeJson = decodeApiError \code _ -> postTransactionsErrorFromString code
 
 type GetTransactionsResponse = TxHeader
 
